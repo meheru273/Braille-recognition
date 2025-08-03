@@ -1,7 +1,5 @@
-# Following working detector API pattern
-fastapi==0.111.0
-mangum==0.18.0
+# Minimal requirements for native Vercel handler
 requests==2.31.0
 python-dotenv==1.0.1
 
-# Removed heavy dependencies to reduce bundle size
+# No FastAPI or Mangum needed for native handler

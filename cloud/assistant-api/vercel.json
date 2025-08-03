@@ -9,7 +9,7 @@
   "functions": {
     "api/**": {
       "maxDuration": 30,
-      "excludeFiles": "{**/__pycache__/**,**/*.pyc,**/*.log,**/*.md,**/tests/**,**/docs/**,**/examples/**,**/*.env,**/firebase*,**/detector*,**/*.json,**/*.jpg,**/*.png,**/*.jpeg}"
+      "excludeFiles": "{**/__pycache__/**,**/*.pyc,**/*.log,**/*.md,**/tests/**,**/docs/**,**/examples/**,**/*.env}"
     }
   }
 }

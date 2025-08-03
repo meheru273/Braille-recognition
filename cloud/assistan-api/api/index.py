@@ -1,4 +1,4 @@
-# assistant_api.py - Lightweight AI Assistant Microservice
+# api/index.py - Vercel entry point
 from fastapi import FastAPI, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -7,13 +7,17 @@ from typing import List, Dict, Optional
 from datetime import datetime
 import uuid
 import asyncio
-from assistant_api import app
+
 # Import lightweight assistant
 try:
+    import sys
+    import os
+    # Add parent directory to path so we can import assistant.py
+    sys.path.append(os.path.dirname(os.path.dirname(__file__)))
     from assistant import BrailleAssistant, BrailleResult
 except ImportError as e:
     print(f"Import error: {e}")
-    print("Make sure assistant.py is in the same directory")
+    print("Make sure assistant.py is in the parent directory")
 
 # Initialize FastAPI
 app = FastAPI(
@@ -335,5 +339,5 @@ async def internal_error_handler(request, exc):
         content={"error": "Internal server error"}
     )
 
-# Vercel handler
+# Vercel handler - this is what Vercel will call
 handler = Mangum(app)

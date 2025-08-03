@@ -1,0 +1,17 @@
+{
+  "functions": {
+    "api/index.py": {
+      "runtime": "python3.9",
+      "maxDuration": 30
+    }
+  },
+  "env": {
+    "DETECTOR_API_URL": "https://braille-recognition-detector.vercel.app",
+    "ASSISTANT_API_URL": "https://braille-recognition-4c3f.vercel.app"
+  },
+  "build": {
+    "env": {
+      "PYTHONPATH": "$PYTHONPATH:."
+    }
+  }
+}

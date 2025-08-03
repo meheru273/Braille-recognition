@@ -1,0 +1,13 @@
+# requirements.txt - Optimized for Assistant API
+fastapi==0.111.0
+mangum==0.18.0
+python-multipart==0.0.9
+pydantic==2.6.0
+python-dotenv==1.0.1
+
+# AI/Chat dependencies
+groq==0.7.0
+openai==1.35.10  # Updated to newer version with better dependency resolution
+
+# Lightweight HTTP client (let pip resolve the correct version)
+requests

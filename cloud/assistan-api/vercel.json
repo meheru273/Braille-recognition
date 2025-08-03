@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/api/index.py"
+    }
+  ],
+  "functions": {
+    "api/**": {
+      "maxDuration": 30,
+      "runtime": "@vercel/python@3.0.0"
+    }
+  }
+}

@@ -1,24 +1,13 @@
-# requirements.txt - Optimized for Vercel deployment
-# Core API dependencies
+# requirements.txt - Optimized for Assistant API
 fastapi==0.111.0
 mangum==0.18.0
 python-multipart==0.0.9
 pydantic==2.6.0
-
-# Essential utilities
 python-dotenv==1.0.1
-requests==2.31.0
 
-# Image processing (essential only)
-pillow==10.3.0
+# AI/Chat dependencies
+groq==0.7.0
+openai==1.35.10  # Updated to newer version with better dependency resolution
 
-# Inference SDK for Roboflow (keep only if absolutely necessary)
-inference-sdk==0.45.0
-
-# Minimal LangChain components (replacing firebase-admin)
-langchain-core==0.2.10
-langchain-community==0.2.9
-langchain-openai==0.1.1
-
-# Lightweight alternatives to firebase-admin
-google-auth==2.23.4
+# Lightweight HTTP client (let pip resolve the correct version)
+requests

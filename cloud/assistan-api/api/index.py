@@ -12,7 +12,6 @@ import asyncio
 
 # Import your modules
 try:
-    from detector import BrailleDetector
     from assistant import BrailleAssistant
     from firebase_service import firebase_service, BrailleDetectionResult
 except ImportError as e:

@@ -14,7 +14,7 @@ try:
     import os
     # Add parent directory to path so we can import assistant.py
     sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-    from assistant import BrailleAssistant, BrailleResult
+    from assistant import BrailleAssistant
 except ImportError as e:
     print(f"Import error: {e}")
     print("Make sure assistant.py is in the parent directory")

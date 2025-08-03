@@ -1,15 +1,12 @@
 fastapi==0.104.1
 mangum==0.17.0
 python-multipart==0.0.6
-uvicorn==0.24.0
 pillow==10.1.0
 python-dotenv==1.0.0
 firebase-admin==6.2.0
 inference-sdk==0.9.12
-langchain==0.1.0
 langchain-openai==0.0.5
 langchain-community==0.0.10
 langgraph==0.0.21
 wikipedia==1.4.0
 requests==2.31.0
-pydantic==2.5.0

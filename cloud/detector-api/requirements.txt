@@ -1,9 +1,5 @@
-# Optimized requirements.txt for Vercel deployment
 fastapi==0.111.0
 mangum==0.18.0
-inference-sdk==0.45.0
-Pillow==10.3.0
 python-dotenv==1.0.1
-
-# Remove unnecessary dependencies to reduce bundle size
-# requests is included in inference-sdk
+requests==2.31.0
+Pillow==10.3.0

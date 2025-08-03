@@ -1,17 +1,24 @@
-# Core FastAPI and web framework
-fastapi==0.104.1
-mangum==0.17.0
-python-multipart==0.0.6
-python-dotenv==1.0.0
+# requirements.txt - Optimized for Vercel deployment
+# Core API dependencies
+fastapi==0.111.0
+mangum==0.18.0
+python-multipart==0.0.9
+pydantic==2.6.0
 
-# Image processing (lightweight)
-Pillow==10.1.0
+# Essential utilities
+python-dotenv==1.0.1
+requests==2.31.0
 
-# HTTP client for API calls
-httpx==0.25.2
+# Image processing (essential only)
+pillow==10.3.0
 
-# Firebase for database operations
-firebase-admin==6.2.0
+# Inference SDK for Roboflow (keep only if absolutely necessary)
+inference-sdk==0.45.0
 
-# CORS support
-uvicorn[standard]==0.24.0
+# Minimal LangChain components (replacing firebase-admin)
+langchain-core==0.2.10
+langchain-community==0.2.9
+langchain-openai==0.1.1
+
+# Lightweight alternatives to firebase-admin
+google-auth==2.23.4

@@ -1,14 +1,5 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "api/index.py",
-      "use": "@vercel/python",
-      "config": {
-        "maxLambdaSize": "50mb"
-      }
-    }
-  ],
   "routes": [
     {
       "src": "/(.*)",
@@ -16,11 +7,9 @@
     }
   ],
   "functions": {
-    "api/index.py": {
-      "maxDuration": 30
+    "api/**": {
+      "maxDuration": 30,
+      "excludeFiles": "{**/__pycache__/**,**/*.pyc,**/*.log,**/*.md,**/tests/**,**/docs/**,**/examples/**,**/*.env,**/firebase*,**/detector*,**/*.json,**/*.jpg,**/*.png,**/*.jpeg}"
     }
-  },
-  "env": {
-    "PYTHONPATH": "."
   }
 }

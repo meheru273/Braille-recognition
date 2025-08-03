@@ -1,7 +1,8 @@
-# api/index.py - Fixed Vercel-compatible entry point
+# api/index.py - Assistant API following working detector pattern
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from mangum import Mangum
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 from datetime import datetime
@@ -10,19 +11,41 @@ import asyncio
 import sys
 import os
 
-# Import lightweight assistant with better error handling
-BrailleAssistant = None
-try:
-    # Add parent directory to path
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    parent_dir = os.path.dirname(current_dir)
-    if parent_dir not in sys.path:
-        sys.path.insert(0, parent_dir)
-    
-    from assistant import BrailleAssistant
-except ImportError as e:
-    print(f"Import error: {e}")
-    BrailleAssistant = None
+# Initialize FastAPI with minimal config like detector
+app = FastAPI(
+    title="AI Assistant API",
+    version="2.0.0"
+)
+
+# Minimal CORS middleware (same as detector)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+# Lazy loading for assistant (same pattern as detector)
+assistant = None
+
+def get_assistant():
+    """Lazy load assistant to reduce cold start time"""
+    global assistant
+    if assistant is None:
+        try:
+            # Import with better path handling
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            parent_dir = os.path.dirname(current_dir)
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            
+            from assistant import BrailleAssistant
+            assistant = BrailleAssistant()
+        except ImportError as e:
+            raise HTTPException(status_code=503, detail=f"Assistant unavailable: {e}")
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"Assistant initialization failed: {e}")
+    return assistant
 
 # Pydantic models
 class BrailleProcessRequest(BaseModel):
@@ -42,72 +65,35 @@ class BatchProcessRequest(BaseModel):
     texts: List[str]
     task: str = "explain"
 
-# Create FastAPI app with minimal config for Vercel
-app = FastAPI(
-    title="AI Assistant API",
-    description="Lightweight AI Assistant for text processing and chat",
-    version="2.0.1"
-)
-
-# Configure CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
-)
-
-# Global assistant instance
-assistant_instance = None
-
-def get_assistant():
-    """Lazy load assistant"""
-    global assistant_instance
-    if assistant_instance is None:
-        if BrailleAssistant is None:
-            raise HTTPException(
-                status_code=503, 
-                detail="Assistant module not available"
-            )
-        try:
-            assistant_instance = BrailleAssistant()
-        except Exception as e:
-            raise HTTPException(
-                status_code=503, 
-                detail=f"Assistant initialization failed: {str(e)}"
-            )
-    return assistant_instance
-
 @app.get("/")
 async def root():
-    """API status endpoint"""
+    """Minimal API status endpoint (same as detector)"""
     return {
         "service": "AI Assistant API",
         "status": "active",
-        "version": "2.0.1",
-        "assistant_available": BrailleAssistant is not None,
-        "endpoints": [
-            "/health", "/capabilities", "/process-braille", 
-            "/chat", "/process-text", "/batch-process"
-        ]
+        "version": "2.0.0"
     }
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "version": "2.0.1",
-        "assistant_available": BrailleAssistant is not None,
-        "timestamp": datetime.now().isoformat()
-    }
+    """Minimal health check (same pattern as detector)"""
+    try:
+        assistant_ready = assistant is not None
+        return {
+            "status": "healthy",
+            "assistant_ready": assistant_ready
+        }
+    except:
+        return {
+            "status": "healthy",
+            "assistant_ready": False
+        }
 
 @app.get("/capabilities")
 async def get_capabilities():
     """Get assistant capabilities"""
     return {
-        "version": "2.0.1",
+        "version": "2.0.0",
         "capabilities": {
             "braille_processing": True,
             "general_chat": True,
@@ -116,26 +102,27 @@ async def get_capabilities():
         },
         "supported_tasks": ["explain", "summarize", "correct", "enhance", "analyze"],
         "limits": {
-            "max_batch_size": 5,
+            "max_batch_size": 3,  # Reduced like detector
             "max_text_length": 2000
         }
     }
 
 @app.post("/process-braille")
 async def process_braille_text(request: BrailleProcessRequest):
-    """Process detected braille strings"""
+    """Process detected braille strings (optimized for Vercel)"""
+    
     if not request.detected_strings:
         raise HTTPException(status_code=400, detail="No braille strings provided")
     
-    session_id = request.session_id or str(uuid.uuid4())[:8]
+    session_id = request.session_id or str(uuid.uuid4())[:8]  # Shorter ID like detector
     
     try:
         ai_assistant = get_assistant()
         
-        # Process with timeout
+        # Process with timeout (same as detector pattern)
         result = await asyncio.wait_for(
             asyncio.to_thread(ai_assistant.process_braille_strings, request.detected_strings),
-            timeout=25
+            timeout=25  # Leave 5 seconds buffer for Vercel's 30s limit
         )
         
         return {
@@ -145,7 +132,7 @@ async def process_braille_text(request: BrailleProcessRequest):
                 "interpreted_text": result.text,
                 "explanation": result.explanation,
                 "confidence": round(result.confidence, 3),
-                "input_strings": request.detected_strings[:10],
+                "input_strings": request.detected_strings[:10],  # Limit for response size
                 "processing_timestamp": datetime.now().isoformat()
             },
             "metadata": {
@@ -156,8 +143,10 @@ async def process_braille_text(request: BrailleProcessRequest):
         
     except asyncio.TimeoutError:
         raise HTTPException(status_code=408, detail="Processing timeout")
+    except HTTPException:
+        raise
     except Exception as e:
-        # Fallback response
+        # Fallback response (like detector error handling)
         fallback_text = ' '.join(request.detected_strings)
         return {
             "success": True,
@@ -179,6 +168,7 @@ async def process_braille_text(request: BrailleProcessRequest):
 @app.post("/chat")
 async def chat_with_assistant(request: ChatRequest):
     """Chat with AI assistant"""
+    
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     
@@ -187,6 +177,7 @@ async def chat_with_assistant(request: ChatRequest):
     try:
         ai_assistant = get_assistant()
         
+        # Process with timeout (shorter timeout like detector batch)
         response_text = await asyncio.wait_for(
             asyncio.to_thread(ai_assistant.chat, request.message, thread_id),
             timeout=20
@@ -199,11 +190,17 @@ async def chat_with_assistant(request: ChatRequest):
                 "user_message": request.message,
                 "assistant_response": response_text,
                 "response_timestamp": datetime.now().isoformat()
+            },
+            "metadata": {
+                "message_length": len(request.message),
+                "response_length": len(response_text)
             }
         }
         
     except asyncio.TimeoutError:
         raise HTTPException(status_code=408, detail="Chat timeout")
+    except HTTPException:
+        raise
     except Exception as e:
         return {
             "success": False,
@@ -215,6 +212,7 @@ async def chat_with_assistant(request: ChatRequest):
 @app.post("/process-text")
 async def process_general_text(request: TextProcessRequest):
     """Process general text with specific tasks"""
+    
     if not request.text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty")
     
@@ -225,6 +223,7 @@ async def process_general_text(request: TextProcessRequest):
     try:
         ai_assistant = get_assistant()
         
+        # Process with timeout
         response = await asyncio.wait_for(
             asyncio.to_thread(ai_assistant.process_text, request.text, request.task, request.max_length),
             timeout=20
@@ -237,11 +236,18 @@ async def process_general_text(request: TextProcessRequest):
                 "processed_text": response,
                 "task_performed": request.task,
                 "processing_timestamp": datetime.now().isoformat()
+            },
+            "metadata": {
+                "original_length": len(request.text),
+                "processed_length": len(response),
+                "task": request.task
             }
         }
         
     except asyncio.TimeoutError:
         raise HTTPException(status_code=408, detail="Processing timeout")
+    except HTTPException:
+        raise
     except Exception as e:
         return {
             "success": False,
@@ -252,9 +258,10 @@ async def process_general_text(request: TextProcessRequest):
 
 @app.post("/batch-process")
 async def batch_process_texts(request: BatchProcessRequest):
-    """Process multiple texts in batch"""
-    if len(request.texts) > 5:
-        raise HTTPException(status_code=400, detail="Maximum 5 texts allowed per batch")
+    """Process multiple texts in batch (limited to 3 like detector)"""
+    
+    if len(request.texts) > 3:  # Reduced limit like detector
+        raise HTTPException(status_code=400, detail="Maximum 3 texts allowed per batch")
     
     valid_tasks = ["explain", "summarize", "correct", "enhance", "analyze"]
     if request.task not in valid_tasks:
@@ -279,7 +286,7 @@ async def batch_process_texts(request: BatchProcessRequest):
         try:
             response = await asyncio.wait_for(
                 asyncio.to_thread(ai_assistant.process_text, text, request.task, 300),
-                timeout=15
+                timeout=15  # Shorter timeout for batch
             )
             
             results.append({
@@ -315,15 +322,12 @@ async def batch_process_texts(request: BatchProcessRequest):
         }
     }
 
-# Error handlers
+# Minimal error handlers (same as detector)
 @app.exception_handler(404)
 async def not_found_handler(request, exc):
     return JSONResponse(
         status_code=404,
-        content={
-            "error": "Endpoint not found", 
-            "available_endpoints": ["/", "/health", "/capabilities", "/process-braille", "/chat", "/process-text", "/batch-process"]
-        }
+        content={"error": "Endpoint not found"}
     )
 
 @app.exception_handler(500)
@@ -333,40 +337,5 @@ async def internal_error_handler(request, exc):
         content={"error": "Internal server error", "detail": str(exc)}
     )
 
-# Vercel handler - Fixed version
-try:
-    from mangum import Mangum
-    # Use lifespan="off" to avoid issues with Vercel
-    handler = Mangum(app, lifespan="off", api_gateway_base_path="/")
-except ImportError:
-    # Create a simple ASGI handler if mangum fails
-    async def handler(scope, receive, send):
-        if scope["type"] == "http":
-            await app(scope, receive, send)
-        else:
-            await send({
-                "type": "http.response.start",
-                "status": 200,
-                "headers": [[b"content-type", b"application/json"]],
-            })
-            await send({
-                "type": "http.response.body",
-                "body": b'{"error": "Unsupported request type"}',
-            })
-
-# Alternative handler for Vercel compatibility
-def lambda_handler(event, context):
-    """Alternative handler for better Vercel compatibility"""
-    try:
-        from mangum import Mangum
-        mangum_handler = Mangum(app, lifespan="off")
-        return mangum_handler(event, context)
-    except Exception as e:
-        return {
-            "statusCode": 500,
-            "headers": {"Content-Type": "application/json"},
-            "body": f'{{"error": "Handler error: {str(e)}"}}'
-        }
-
-# Export both handlers
-__all__ = ["app", "handler", "lambda_handler"]
+# Vercel handler (same as your working detector)
+handler = Mangum(app)

@@ -1,4 +1,4 @@
-# detector_api.py - Braille Detection Microservice
+# detector_api.py - Optimized Braille Detection for Vercel
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -6,154 +6,186 @@ from mangum import Mangum
 import os
 import uuid
 import tempfile
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 import asyncio
+from PIL import Image
+import io
 
-# Import detector module
-try:
-    from detector import BrailleDetector
-except ImportError as e:
-    print(f"Import error: {e}")
-    print("Make sure detector.py is in the same directory")
-
-# Initialize FastAPI
+# Initialize FastAPI with reduced metadata
 app = FastAPI(
     title="Braille Detector API",
-    description="Microservice for Braille character detection using Computer Vision",
     version="1.0.0"
 )
 
-# CORS middleware
+# Minimal CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure for your specific domains in production
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
-# Initialize detector
+# Lazy loading for detector
 detector = None
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize Braille detector on startup"""
+def get_detector():
+    """Lazy load detector to reduce cold start time"""
     global detector
+    if detector is None:
+        try:
+            from detector import BrailleDetector
+            detector = BrailleDetector()
+        except ImportError as e:
+            raise HTTPException(status_code=503, detail=f"Detector unavailable: {e}")
+    return detector
+
+# Validate image size and format
+def validate_image(file: UploadFile) -> None:
+    """Validate image before processing"""
+    if not file.content_type or not file.content_type.startswith('image/'):
+        raise HTTPException(status_code=400, detail="File must be an image")
     
+    # Check file size (limit to 4MB to stay under Vercel's 4.5MB limit)
+    if hasattr(file, 'size') and file.size > 4 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image too large. Maximum 4MB allowed")
+
+def optimize_image(image_content: bytes) -> bytes:
+    """Optimize image to reduce processing load"""
     try:
-        print("Initializing Braille Detector...")
-        detector = BrailleDetector()
-        print("Braille Detector initialized successfully")
-        
+        with Image.open(io.BytesIO(image_content)) as img:
+            # Convert to RGB if necessary
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            
+            # Resize if too large (max 1920x1080)
+            max_size = (1920, 1080)
+            if img.size[0] > max_size[0] or img.size[1] > max_size[1]:
+                img.thumbnail(max_size, Image.Resampling.LANCZOS)
+            
+            # Compress image
+            output = io.BytesIO()
+            img.save(output, format='JPEG', quality=85, optimize=True)
+            return output.getvalue()
     except Exception as e:
-        print(f"Detector initialization error: {e}")
+        raise HTTPException(status_code=422, detail=f"Image processing failed: {e}")
 
 @app.get("/")
 async def root():
-    """API status endpoint"""
+    """Minimal API status endpoint"""
     return {
         "service": "Braille Detector API",
         "status": "active",
-        "version": "1.0.0",
-        "detector_ready": detector is not None,
-        "endpoints": {
-            "detect": "/detect",
-            "health": "/health"
-        }
+        "version": "1.0.0"
     }
 
 @app.post("/detect")
 async def detect_braille_characters(
     file: UploadFile = File(...),
     min_confidence: float = Form(0.4),
-    create_annotated: bool = Form(True)
+    create_annotated: bool = Form(False)  # Default to False to save processing
 ):
     """
-    Detect Braille characters in uploaded image
-    
-    - **file**: Image file (jpg, png, etc.)
-    - **min_confidence**: Minimum confidence threshold (0.0-1.0)
-    - **create_annotated**: Whether to create annotated image
+    Detect Braille characters in uploaded image (optimized for Vercel)
     """
     
-    # Validate file type
-    if not file.content_type or not file.content_type.startswith('image/'):
-        raise HTTPException(status_code=400, detail="File must be an image")
-    
-    if not detector:
-        raise HTTPException(status_code=503, detail="Braille detector not available")
-    
-    session_id = str(uuid.uuid4())
+    validate_image(file)
+    session_id = str(uuid.uuid4())[:8]  # Shorter session ID
     temp_path = None
-    annotated_path = None
     
     try:
-        # Save uploaded file temporarily
+        # Get detector (lazy loaded)
+        braille_detector = get_detector()
+        
+        # Read and optimize image
+        content = await file.read()
+        optimized_content = optimize_image(content)
+        
+        # Use memory-based temporary file to avoid disk I/O issues
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
-            content = await file.read()
-            temp_file.write(content)
+            temp_file.write(optimized_content)
             temp_path = temp_file.name
         
-        print(f"Processing image for session {session_id}")
+        # Run detection with timeout
+        try:
+            detection_result = await asyncio.wait_for(
+                asyncio.to_thread(braille_detector.detect_braille, temp_path),
+                timeout=25  # Leave 5 seconds buffer for Vercel's 30s limit
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=408, detail="Detection timeout")
         
-        # Run Braille detection
-        detection_result = detector.detect_braille(temp_path)
         if not detection_result:
-            raise HTTPException(status_code=422, detail="No braille characters detected in image")
+            return {
+                "success": True,
+                "session_id": session_id,
+                "detection_results": {
+                    "organized_text": [],
+                    "statistics": {
+                        "total_detections": 0,
+                        "message": "No braille characters detected"
+                    }
+                }
+            }
         
         # Extract predictions
-        predictions = detector.extract_predictions(detection_result)
+        predictions = braille_detector.extract_predictions(detection_result)
         if not predictions:
-            raise HTTPException(status_code=422, detail="No valid braille predictions found")
+            return {
+                "success": True,
+                "session_id": session_id,
+                "detection_results": {
+                    "organized_text": [],
+                    "statistics": {
+                        "total_detections": 0,
+                        "message": "No valid predictions found"
+                    }
+                }
+            }
         
-        # Organize into text rows
-        detected_strings = detector.organize_text_by_rows(predictions, min_confidence)
+        # Organize text
+        detected_strings = braille_detector.organize_text_by_rows(predictions, min_confidence)
         
-        # Create annotated image if requested
-        annotated_image_created = False
-        if create_annotated and predictions:
-            annotated_path = temp_path.replace('.jpg', '_annotated.png')
-            annotated_image_created = detector.create_annotated_image(
-                temp_path, predictions, annotated_path, min_confidence
-            )
-        
-        # Calculate statistics
+        # Calculate basic statistics
         high_confidence_predictions = [p for p in predictions if p['confidence'] >= min_confidence]
-        avg_confidence = sum(p['confidence'] for p in high_confidence_predictions) / len(high_confidence_predictions) if high_confidence_predictions else 0
+        avg_confidence = (
+            sum(p['confidence'] for p in high_confidence_predictions) / len(high_confidence_predictions)
+            if high_confidence_predictions else 0
+        )
         
-        return {
+        # Minimal response to reduce bandwidth
+        response = {
             "success": True,
             "session_id": session_id,
             "detection_results": {
-                "raw_predictions": predictions,
                 "organized_text": detected_strings,
                 "statistics": {
                     "total_detections": len(predictions),
                     "high_confidence_detections": len(high_confidence_predictions),
-                    "average_confidence": round(avg_confidence, 3),
-                    "rows_detected": len(detected_strings),
-                    "min_confidence_used": min_confidence
-                },
-                "annotated_image_created": annotated_image_created,
-                "processing_timestamp": datetime.now().isoformat()
+                    "average_confidence": round(avg_confidence, 2),
+                    "rows_detected": len(detected_strings)
+                }
             }
         }
+        
+        # Only include raw predictions if explicitly requested
+        if create_annotated and len(predictions) < 50:  # Limit to prevent large responses
+            response["detection_results"]["raw_predictions"] = predictions[:50]
+        
+        return response
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Detection processing error: {e}")
         raise HTTPException(status_code=500, detail=f"Detection failed: {str(e)}")
     
     finally:
-        # Cleanup temporary files
-        for path in [temp_path, annotated_path]:
-            if path and os.path.exists(path):
-                try:
-                    os.unlink(path)
-                except:
-                    pass
+        # Cleanup
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
 
 @app.post("/detect-batch")
 async def detect_braille_batch(
@@ -161,59 +193,68 @@ async def detect_braille_batch(
     min_confidence: float = Form(0.4)
 ):
     """
-    Batch detect Braille characters in multiple images
-    
-    - **files**: List of image files
-    - **min_confidence**: Minimum confidence threshold
+    Batch detect (limited to 3 files for Vercel)
     """
     
-    if not detector:
-        raise HTTPException(status_code=503, detail="Braille detector not available")
+    if len(files) > 3:  # Reduced limit for Vercel
+        raise HTTPException(status_code=400, detail="Maximum 3 files allowed per batch")
     
-    if len(files) > 10:  # Limit batch size
-        raise HTTPException(status_code=400, detail="Maximum 10 files allowed per batch")
-    
+    braille_detector = get_detector()
     results = []
     
     for i, file in enumerate(files):
-        if not file.content_type or not file.content_type.startswith('image/'):
-            results.append({
-                "file_index": i,
-                "filename": file.filename,
-                "success": False,
-                "error": "File must be an image"
-            })
-            continue
-        
-        temp_path = None
         try:
-            # Save uploaded file temporarily
+            validate_image(file)
+            
+            content = await file.read()
+            optimized_content = optimize_image(content)
+            
             with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
-                content = await file.read()
-                temp_file.write(content)
+                temp_file.write(optimized_content)
                 temp_path = temp_file.name
             
-            # Run detection
-            detection_result = detector.detect_braille(temp_path)
-            predictions = detector.extract_predictions(detection_result) if detection_result else []
-            detected_strings = detector.organize_text_by_rows(predictions, min_confidence)
+            try:
+                detection_result = await asyncio.wait_for(
+                    asyncio.to_thread(braille_detector.detect_braille, temp_path),
+                    timeout=20  # Shorter timeout for batch
+                )
+                
+                predictions = braille_detector.extract_predictions(detection_result) if detection_result else []
+                detected_strings = braille_detector.organize_text_by_rows(predictions, min_confidence)
+                
+                high_confidence_predictions = [p for p in predictions if p['confidence'] >= min_confidence]
+                avg_confidence = (
+                    sum(p['confidence'] for p in high_confidence_predictions) / len(high_confidence_predictions)
+                    if high_confidence_predictions else 0
+                )
+                
+                results.append({
+                    "file_index": i,
+                    "filename": file.filename,
+                    "success": True,
+                    "detected_text": detected_strings,
+                    "statistics": {
+                        "total_detections": len(predictions),
+                        "high_confidence_detections": len(high_confidence_predictions),
+                        "average_confidence": round(avg_confidence, 2)
+                    }
+                })
+                
+            except asyncio.TimeoutError:
+                results.append({
+                    "file_index": i,
+                    "filename": file.filename,
+                    "success": False,
+                    "error": "Processing timeout"
+                })
             
-            high_confidence_predictions = [p for p in predictions if p['confidence'] >= min_confidence]
-            avg_confidence = sum(p['confidence'] for p in high_confidence_predictions) / len(high_confidence_predictions) if high_confidence_predictions else 0
-            
-            results.append({
-                "file_index": i,
-                "filename": file.filename,
-                "success": True,
-                "detected_text": detected_strings,
-                "statistics": {
-                    "total_detections": len(predictions),
-                    "high_confidence_detections": len(high_confidence_predictions),
-                    "average_confidence": round(avg_confidence, 3),
-                    "rows_detected": len(detected_strings)
-                }
-            })
-            
+            finally:
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.unlink(temp_path)
+                    except:
+                        pass
+                        
         except Exception as e:
             results.append({
                 "file_index": i,
@@ -221,13 +262,6 @@ async def detect_braille_batch(
                 "success": False,
                 "error": str(e)
             })
-        
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                try:
-                    os.unlink(temp_path)
-                except:
-                    pass
     
     successful_results = [r for r in results if r['success']]
     
@@ -236,49 +270,33 @@ async def detect_braille_batch(
         "batch_results": results,
         "summary": {
             "total_files": len(files),
-            "successful_detections": len(successful_results),
-            "failed_detections": len(files) - len(successful_results)
+            "successful_detections": len(successful_results)
         }
     }
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    return {
-        "service": "Braille Detector API",
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "detector_ready": detector is not None,
-        "dependencies": {
-            "roboflow_client": "available" if detector and detector.client else "unavailable",
-            "pil": "available",
-            "inference_sdk": "available"
+    """Minimal health check"""
+    try:
+        detector_ready = detector is not None
+        return {
+            "status": "healthy",
+            "detector_ready": detector_ready
         }
-    }
+    except:
+        return {
+            "status": "healthy",
+            "detector_ready": False
+        }
 
-@app.get("/detector-info")
-async def get_detector_info():
-    """Get detector configuration information"""
-    if not detector:
-        raise HTTPException(status_code=503, detail="Detector not available")
-    
-    return {
-        "detector_config": {
-            "workspace_name": detector.workspace_name,
-            "workflow_id": detector.workflow_id,
-            "available_classes": list(detector.class_colors.keys()),
-            "total_classes": len(detector.class_colors)
-        },
-        "color_mapping": detector.class_colors
-    }
-
-# Error handlers
+# Minimal error handlers
 @app.exception_handler(404)
 async def not_found_handler(request, exc):
     return JSONResponse(
         status_code=404,
-        content={"error": "Endpoint not found", "message": "The requested endpoint does not exist"}
+        content={"error": "Endpoint not found"}
     )
+
 
 @app.exception_handler(500)
 async def internal_error_handler(request, exc):

@@ -7,7 +7,7 @@ from typing import List, Dict, Optional
 from datetime import datetime
 import uuid
 import asyncio
-
+from assistant_api import app
 # Import lightweight assistant
 try:
     from assistant import BrailleAssistant, BrailleResult

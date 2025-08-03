@@ -8,8 +8,7 @@
   ],
   "functions": {
     "api/**": {
-      "maxDuration": 30,
-      "runtime": "@vercel/python@3.0.0"
+      "maxDuration": 30
     }
   }
 }

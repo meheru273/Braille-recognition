@@ -1,7 +1,8 @@
-# api/index.py - Vercel-compatible entry point
-from fastapi import FastAPI, HTTPException, Form
+# api/index.py - Vercel-compatible entry point (JSON-based)
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from typing import List, Dict, Optional
 from datetime import datetime
 import uuid
@@ -22,8 +23,27 @@ except ImportError as e:
     print(f"Import error: {e}")
     print(f"Current dir: {os.getcwd()}")
     print(f"Files in current dir: {os.listdir('.')}")
-    print(f"Files in parent dir: {os.listdir('..')}")
+    if os.path.exists('..'):
+        print(f"Files in parent dir: {os.listdir('..')}")
     BrailleAssistant = None
+
+# Pydantic models for request/response
+class BrailleProcessRequest(BaseModel):
+    detected_strings: List[str]
+    session_id: Optional[str] = None
+
+class ChatRequest(BaseModel):
+    message: str
+    thread_id: Optional[str] = None
+
+class TextProcessRequest(BaseModel):
+    text: str
+    task: str = "explain"
+    max_length: Optional[int] = 400
+
+class BatchProcessRequest(BaseModel):
+    texts: List[str]
+    task: str = "explain"
 
 # Initialize FastAPI
 app = FastAPI(
@@ -70,14 +90,15 @@ async def root():
         "version": "2.0.0",
         "type": "lightweight",
         "assistant_available": BrailleAssistant is not None,
+        "request_format": "JSON",
         "endpoints": [
-            "/",
-            "/health",
-            "/capabilities",
-            "/process-braille",
-            "/chat",
-            "/process-text",
-            "/batch-process"
+            {"path": "/", "method": "GET", "description": "API status"},
+            {"path": "/health", "method": "GET", "description": "Health check"},
+            {"path": "/capabilities", "method": "GET", "description": "Get capabilities"},
+            {"path": "/process-braille", "method": "POST", "description": "Process braille strings"},
+            {"path": "/chat", "method": "POST", "description": "Chat with assistant"},
+            {"path": "/process-text", "method": "POST", "description": "Process text"},
+            {"path": "/batch-process", "method": "POST", "description": "Batch process texts"}
         ]
     }
 
@@ -115,6 +136,7 @@ async def get_capabilities():
     return {
         "version": "2.0.0",
         "type": "lightweight",
+        "request_format": "JSON",
         "capabilities": {
             "braille_processing": True,
             "general_chat": True,
@@ -129,31 +151,27 @@ async def get_capabilities():
             "max_response_length": 500
         },
         "performance": {
-            "bundle_size": "~5MB (vs 80MB+ with LangChain)",
-            "cold_start": "3-8 seconds",
+            "bundle_size": "~3MB (JSON-based, no multipart)",
+            "cold_start": "2-6 seconds",
             "processing_timeout": "20-25 seconds"
         }
     }
 
 @app.post("/process-braille")
-async def process_braille_text(
-    detected_strings: List[str] = Form(...),
-    session_id: Optional[str] = Form(None)
-):
+async def process_braille_text(request: BrailleProcessRequest):
     """Process detected braille strings into readable text with explanation"""
     
-    if not detected_strings:
+    if not request.detected_strings:
         raise HTTPException(status_code=400, detail="No braille strings provided")
     
-    if not session_id:
-        session_id = str(uuid.uuid4())[:8]
+    session_id = request.session_id or str(uuid.uuid4())[:8]
     
     try:
         ai_assistant = get_assistant()
         
         # Process with timeout
         result = await asyncio.wait_for(
-            asyncio.to_thread(ai_assistant.process_braille_strings, detected_strings),
+            asyncio.to_thread(ai_assistant.process_braille_strings, request.detected_strings),
             timeout=25
         )
         
@@ -164,11 +182,11 @@ async def process_braille_text(
                 "interpreted_text": result.text,
                 "explanation": result.explanation,
                 "confidence": round(result.confidence, 3),
-                "input_strings": detected_strings[:10],  # Limit for response size
+                "input_strings": request.detected_strings[:10],  # Limit for response size
                 "processing_timestamp": datetime.now().isoformat()
             },
             "metadata": {
-                "input_count": len(detected_strings),
+                "input_count": len(request.detected_strings),
                 "processing_method": "lightweight_ai"
             }
         }
@@ -177,7 +195,7 @@ async def process_braille_text(
         raise HTTPException(status_code=408, detail="Processing timeout")
     except Exception as e:
         # Fallback result
-        fallback_text = ' '.join(detected_strings)
+        fallback_text = ' '.join(request.detected_strings)
         return {
             "success": True,
             "session_id": session_id,
@@ -185,35 +203,31 @@ async def process_braille_text(
                 "interpreted_text": fallback_text,
                 "explanation": f"Basic text assembly. AI processing failed: {str(e)}",
                 "confidence": 0.3,
-                "input_strings": detected_strings[:10],
+                "input_strings": request.detected_strings[:10],
                 "processing_timestamp": datetime.now().isoformat()
             },
             "metadata": {
-                "input_count": len(detected_strings),
+                "input_count": len(request.detected_strings),
                 "processing_method": "fallback",
                 "error": str(e)
             }
         }
 
 @app.post("/chat")
-async def chat_with_assistant(
-    message: str = Form(...),
-    thread_id: Optional[str] = Form(None)
-):
+async def chat_with_assistant(request: ChatRequest):
     """Chat with AI assistant"""
     
-    if not message.strip():
+    if not request.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     
-    if not thread_id:
-        thread_id = f"chat_{uuid.uuid4()}"[:16]
+    thread_id = request.thread_id or f"chat_{uuid.uuid4()}"[:16]
     
     try:
         ai_assistant = get_assistant()
         
         # Process with timeout
         response_text = await asyncio.wait_for(
-            asyncio.to_thread(ai_assistant.chat, message, thread_id),
+            asyncio.to_thread(ai_assistant.chat, request.message, thread_id),
             timeout=20
         )
         
@@ -221,12 +235,12 @@ async def chat_with_assistant(
             "success": True,
             "thread_id": thread_id,
             "chat_result": {
-                "user_message": message,
+                "user_message": request.message,
                 "assistant_response": response_text,
                 "response_timestamp": datetime.now().isoformat()
             },
             "metadata": {
-                "message_length": len(message),
+                "message_length": len(request.message),
                 "response_length": len(response_text)
             }
         }
@@ -242,18 +256,14 @@ async def chat_with_assistant(
         }
 
 @app.post("/process-text")
-async def process_general_text(
-    text: str = Form(...),
-    task: str = Form("explain"),
-    max_length: Optional[int] = Form(400)
-):
+async def process_general_text(request: TextProcessRequest):
     """Process general text with specific tasks"""
     
-    if not text.strip():
+    if not request.text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty")
     
     valid_tasks = ["explain", "summarize", "correct", "enhance", "analyze"]
-    if task not in valid_tasks:
+    if request.task not in valid_tasks:
         raise HTTPException(status_code=400, detail=f"Task must be one of: {valid_tasks}")
     
     try:
@@ -261,22 +271,22 @@ async def process_general_text(
         
         # Process with timeout
         response = await asyncio.wait_for(
-            asyncio.to_thread(ai_assistant.process_text, text, task, max_length),
+            asyncio.to_thread(ai_assistant.process_text, request.text, request.task, request.max_length),
             timeout=20
         )
         
         return {
             "success": True,
             "processing_result": {
-                "original_text": text,
+                "original_text": request.text,
                 "processed_text": response,
-                "task_performed": task,
+                "task_performed": request.task,
                 "processing_timestamp": datetime.now().isoformat()
             },
             "metadata": {
-                "original_length": len(text),
+                "original_length": len(request.text),
                 "processed_length": len(response),
-                "task": task
+                "task": request.task
             }
         }
         
@@ -286,22 +296,19 @@ async def process_general_text(
         return {
             "success": False,
             "error": str(e),
-            "original_text": text,
-            "task": task
+            "original_text": request.text,
+            "task": request.task
         }
 
 @app.post("/batch-process")
-async def batch_process_texts(
-    texts: List[str] = Form(...),
-    task: str = Form("explain")
-):
+async def batch_process_texts(request: BatchProcessRequest):
     """Process multiple texts in batch (limited to 5 for performance)"""
     
-    if len(texts) > 5:
+    if len(request.texts) > 5:
         raise HTTPException(status_code=400, detail="Maximum 5 texts allowed per batch")
     
     valid_tasks = ["explain", "summarize", "correct", "enhance", "analyze"]
-    if task not in valid_tasks:
+    if request.task not in valid_tasks:
         raise HTTPException(status_code=400, detail=f"Task must be one of: {valid_tasks}")
     
     try:
@@ -311,7 +318,7 @@ async def batch_process_texts(
     
     results = []
     
-    for i, text in enumerate(texts):
+    for i, text in enumerate(request.texts):
         if not text.strip():
             results.append({
                 "index": i,
@@ -322,7 +329,7 @@ async def batch_process_texts(
         
         try:
             response = await asyncio.wait_for(
-                asyncio.to_thread(ai_assistant.process_text, text, task, 300),
+                asyncio.to_thread(ai_assistant.process_text, text, request.task, 300),
                 timeout=15
             )
             
@@ -331,7 +338,7 @@ async def batch_process_texts(
                 "success": True,
                 "original_text": text[:100] + "..." if len(text) > 100 else text,
                 "processed_text": response,
-                "task": task
+                "task": request.task
             })
             
         except asyncio.TimeoutError:
@@ -353,9 +360,9 @@ async def batch_process_texts(
         "success": True,
         "batch_results": results,
         "summary": {
-            "total_texts": len(texts),
+            "total_texts": len(request.texts),
             "successful_processing": len(successful_results),
-            "task_performed": task
+            "task_performed": request.task
         }
     }
 
@@ -377,25 +384,14 @@ async def internal_error_handler(request, exc):
         content={"error": "Internal server error", "detail": str(exc)}
     )
 
-# For Vercel - this is the main handler function
-def handler(request):
-    """Main handler for Vercel serverless function"""
-    import uvicorn
-    from uvicorn.middleware.asgi2 import ASGI2Middleware
-    
-    # Create ASGI2 middleware wrapper
-    asgi_app = ASGI2Middleware(app)
-    
-    # Handle the request
-    return asgi_app(request)
-
-# Alternative handler using mangum (if the above doesn't work)
+# For Vercel - Mangum handler
 try:
     from mangum import Mangum
-    # Create mangum handler as backup
-    mangum_handler = Mangum(app, lifespan="off")
+    handler = Mangum(app, lifespan="off")
 except ImportError:
-    mangum_handler = None
+    # Fallback if mangum isn't available
+    def handler(event, context):
+        return {"statusCode": 500, "body": "Mangum not available"}
 
-# Export both handlers for flexibility
-__all__ = ["app", "handler", "mangum_handler"]
+# Export app for direct usage
+__all__ = ["app", "handler"]

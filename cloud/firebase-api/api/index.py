@@ -1,4 +1,4 @@
-# firebase_api.py - Main Firebase Integration API
+# api/index.py - Main Firebase Integration API for Vercel
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -11,6 +11,10 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 import asyncio
 import json
+import sys
+
+# Add parent directory for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import Firebase service
 try:
@@ -18,6 +22,27 @@ try:
 except ImportError as e:
     print(f"Import error: {e}")
     print("Make sure firebase_service.py is in the same directory")
+    
+    # Fallback class if import fails
+    class MockFirebaseService:
+        def is_connected(self): return False
+        async def store_braille_detection(self, result): return False
+        async def upload_image(self, *args): return None
+        async def create_chat_thread(self, user_id): return str(uuid.uuid4())
+        async def add_chat_message(self, *args): return False
+        async def get_user_chat_threads(self, *args): return []
+        async def get_chat_thread(self, *args): return None
+        async def delete_chat_thread(self, *args): return False
+        async def get_user_detections(self, *args): return []
+        async def create_user_profile(self, *args): return False
+        async def update_user_activity(self, *args): return False
+    
+    firebase_service = MockFirebaseService()
+    
+    class BrailleDetectionResult:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
 
 # Initialize FastAPI
 app = FastAPI(
@@ -36,8 +61,8 @@ app.add_middleware(
 )
 
 # Service URLs - Configure these based on your deployment
-DETECTOR_API_URL = os.getenv("DETECTOR_API_URL", "http://localhost:8001")
-ASSISTANT_API_URL = os.getenv("ASSISTANT_API_URL", "http://localhost:8002")
+DETECTOR_API_URL = os.getenv("DETECTOR_API_URL", "https://braille-recognition-detector.vercel.app")
+ASSISTANT_API_URL = os.getenv("ASSISTANT_API_URL", "https://braille-recognition-4c3f.vercel.app")
 
 @app.on_event("startup")
 async def startup_event():
@@ -202,7 +227,7 @@ async def call_detector_api(image_path: str, min_confidence: float, filename: st
                 files = {"file": (filename, f, "image/jpeg")}
                 data = {
                     "min_confidence": min_confidence,
-                    "create_annotated": True
+                    "create_annotated": False  # Disable to save processing time
                 }
                 
                 response = await client.post(f"{DETECTOR_API_URL}/detect", files=files, data=data)
@@ -224,11 +249,11 @@ async def call_assistant_api(detected_strings: List[str], session_id: str) -> Di
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             data = {
-                "detected_strings": detected_strings,
+                "braille_strings": detected_strings,
                 "session_id": session_id
             }
             
-            response = await client.post(f"{ASSISTANT_API_URL}/process-braille", data=data)
+            response = await client.post(f"{ASSISTANT_API_URL}/api/process-braille", json=data)
             response.raise_for_status()
             return response.json()
             
@@ -295,7 +320,7 @@ async def chat(
         
         response_text = "I apologize, but I couldn't process your message at this time."
         if assistant_result["success"]:
-            response_text = assistant_result["chat_result"]["assistant_response"]
+            response_text = assistant_result.get("response", response_text)
         else:
             response_text = assistant_result.get("fallback_response", response_text)
         
@@ -320,8 +345,7 @@ async def chat(
             "services_used": {
                 "assistant_api": assistant_result["success"],
                 "firebase_database": stored
-            },
-            "metadata": assistant_result.get("metadata", {})
+            }
         }
         
     except Exception as e:
@@ -346,7 +370,7 @@ async def call_assistant_chat_api(message: str, thread_id: str, context: Optiona
             if context:
                 data["context"] = context
             
-            response = await client.post(f"{ASSISTANT_API_URL}/chat", data=data)
+            response = await client.post(f"{ASSISTANT_API_URL}/api/chat", json=data)
             response.raise_for_status()
             return response.json()
             
@@ -377,7 +401,12 @@ async def get_chat_threads(
     user_id: str = Query(...),
     limit: int = Query(20, ge=1, le=100)
 ):
-   
+    """
+    Get user's chat thread history from Firebase
+    
+    - **user_id**: User identifier
+    - **limit**: Maximum number of threads to return (1-100)
+    """
     try:
         threads = await firebase_service.get_user_chat_threads(user_id, limit)
         return {
@@ -603,7 +632,7 @@ async def get_service_status():
     # Check Detector API
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(f"{DETECTOR_API_URL}/detector-info")
+            response = await client.get(f"{DETECTOR_API_URL}/health")
             if response.status_code == 200:
                 services_status["detector"] = {
                     "status": "healthy",
@@ -617,7 +646,7 @@ async def get_service_status():
     # Check Assistant API
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(f"{ASSISTANT_API_URL}/assistant-info")
+            response = await client.get(f"{ASSISTANT_API_URL}/health")
             if response.status_code == 200:
                 services_status["assistant"] = {
                     "status": "healthy",

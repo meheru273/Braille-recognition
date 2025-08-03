@@ -1,15 +1,25 @@
 {
   "version": 2,
+  "functions": {
+    "api/index.py": {
+      "runtime": "python3.11",
+      "maxDuration": 30,
+      "memory": 512,
+      "excludeFiles": "{**/__pycache__/**,**/*.pyc,**/*.log,**/*.md,**/tests/**,**/docs/**,**/examples/**,**/*.env}"
+    }
+  },
   "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/index.py"
+    },
     {
       "src": "/(.*)",
       "dest": "/api/index.py"
     }
   ],
-  "functions": {
-    "api/**": {
-      "maxDuration": 30,
-      "excludeFiles": "{**/__pycache__/**,**/*.pyc,**/*.log,**/*.md,**/tests/**,**/docs/**,**/examples/**,**/*.env}"
-    }
+  "env": {
+    "GROQ_API_KEY": "@groq_api_key",
+    "OPENAI_API_KEY": "@openai_api_key"
   }
 }

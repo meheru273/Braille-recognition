@@ -12,10 +12,7 @@
   "functions": {
     "api/index.py": {
       "maxDuration": 30,
-      "runtime": "@vercel/python@3.0.0",
-      "configuration": {
-        "python": "3.11"
-      }
+      "runtime": "now-python@3.0.0"
     }
   }
 }

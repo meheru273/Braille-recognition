@@ -1,0 +1,5 @@
+# Lightweight Assistant Requirements (No LangChain/LangGraph)
+fastapi==0.111.0
+mangum==0.18.0
+python-dotenv==1.0.1
+requests==2.31.0

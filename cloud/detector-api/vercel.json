@@ -8,7 +8,8 @@
   ],
   "functions": {
     "api/**": {
-      "maxDuration": 30
+      "maxDuration": 30,
+      "excludeFiles": "{**/__pycache__/**,**/*.pyc,**/*.log,**/*.md,**/tests/**,**/docs/**,**/examples/**,**/*.env,**/firebase*,**/assistant*,**/*.json,**/*.jpg,**/*.png,**/*.jpeg}"
     }
   }
 }

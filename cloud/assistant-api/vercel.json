@@ -7,9 +7,9 @@
     }
   ],
   "functions": {
-    "api/**": {
-      "maxDuration": 30,
-      "excludeFiles": "{**/__pycache__/**,**/*.pyc,**/*.log,**/*.md,**/tests/**,**/docs/**,**/examples/**,**/*.env}"
+    "api/index.py": {
+      "runtime": "python@3.9",
+      "maxDuration": 30
     }
   }
 }

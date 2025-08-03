@@ -1,4 +1,4 @@
-# api/index.py - Vercel-compatible entry point (JSON-based)
+# api/index.py - Fixed Vercel-compatible entry point
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -10,9 +10,10 @@ import asyncio
 import sys
 import os
 
-# Import lightweight assistant
+# Import lightweight assistant with better error handling
+BrailleAssistant = None
 try:
-    # Add parent directory to path so we can import assistant.py
+    # Add parent directory to path
     current_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.dirname(current_dir)
     if parent_dir not in sys.path:
@@ -21,13 +22,9 @@ try:
     from assistant import BrailleAssistant
 except ImportError as e:
     print(f"Import error: {e}")
-    print(f"Current dir: {os.getcwd()}")
-    print(f"Files in current dir: {os.listdir('.')}")
-    if os.path.exists('..'):
-        print(f"Files in parent dir: {os.listdir('..')}")
     BrailleAssistant = None
 
-# Pydantic models for request/response
+# Pydantic models
 class BrailleProcessRequest(BaseModel):
     detected_strings: List[str]
     session_id: Optional[str] = None
@@ -45,41 +42,42 @@ class BatchProcessRequest(BaseModel):
     texts: List[str]
     task: str = "explain"
 
-# Initialize FastAPI
+# Create FastAPI app with minimal config for Vercel
 app = FastAPI(
     title="AI Assistant API",
     description="Lightweight AI Assistant for text processing and chat",
-    version="2.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    version="2.0.1"
 )
 
-# CORS middleware
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
 # Global assistant instance
-assistant = None
+assistant_instance = None
 
 def get_assistant():
-    """Lazy load assistant to reduce cold start time"""
-    global assistant
-    if assistant is None:
+    """Lazy load assistant"""
+    global assistant_instance
+    if assistant_instance is None:
         if BrailleAssistant is None:
             raise HTTPException(
                 status_code=503, 
-                detail="Assistant module not available. Check assistant.py import."
+                detail="Assistant module not available"
             )
         try:
-            assistant = BrailleAssistant()
+            assistant_instance = BrailleAssistant()
         except Exception as e:
-            raise HTTPException(status_code=503, detail=f"Assistant initialization failed: {e}")
-    return assistant
+            raise HTTPException(
+                status_code=503, 
+                detail=f"Assistant initialization failed: {str(e)}"
+            )
+    return assistant_instance
 
 @app.get("/")
 async def root():
@@ -87,80 +85,45 @@ async def root():
     return {
         "service": "AI Assistant API",
         "status": "active",
-        "version": "2.0.0",
-        "type": "lightweight",
+        "version": "2.0.1",
         "assistant_available": BrailleAssistant is not None,
-        "request_format": "JSON",
         "endpoints": [
-            {"path": "/", "method": "GET", "description": "API status"},
-            {"path": "/health", "method": "GET", "description": "Health check"},
-            {"path": "/capabilities", "method": "GET", "description": "Get capabilities"},
-            {"path": "/process-braille", "method": "POST", "description": "Process braille strings"},
-            {"path": "/chat", "method": "POST", "description": "Chat with assistant"},
-            {"path": "/process-text", "method": "POST", "description": "Process text"},
-            {"path": "/batch-process", "method": "POST", "description": "Batch process texts"}
+            "/health", "/capabilities", "/process-braille", 
+            "/chat", "/process-text", "/batch-process"
         ]
     }
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    try:
-        assistant_ready = assistant is not None
-        assistant_available = BrailleAssistant is not None
-        
-        return {
-            "service": "AI Assistant API",
-            "status": "healthy",
-            "version": "2.0.0",
-            "type": "lightweight",
-            "assistant_available": assistant_available,
-            "assistant_ready": assistant_ready,
-            "timestamp": datetime.now().isoformat()
-        }
-    except Exception as e:
-        return {
-            "service": "AI Assistant API",
-            "status": "degraded",
-            "version": "2.0.0",
-            "type": "lightweight",
-            "assistant_available": False,
-            "assistant_ready": False,
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
+    return {
+        "status": "healthy",
+        "version": "2.0.1",
+        "assistant_available": BrailleAssistant is not None,
+        "timestamp": datetime.now().isoformat()
+    }
 
 @app.get("/capabilities")
 async def get_capabilities():
     """Get assistant capabilities"""
     return {
-        "version": "2.0.0",
-        "type": "lightweight",
-        "request_format": "JSON",
+        "version": "2.0.1",
         "capabilities": {
             "braille_processing": True,
             "general_chat": True,
             "text_processing": True,
-            "batch_processing": True,
-            "wikipedia_search": True
+            "batch_processing": True
         },
         "supported_tasks": ["explain", "summarize", "correct", "enhance", "analyze"],
         "limits": {
             "max_batch_size": 5,
-            "max_text_length": 2000,
-            "max_response_length": 500
-        },
-        "performance": {
-            "bundle_size": "~3MB (JSON-based, no multipart)",
-            "cold_start": "2-6 seconds",
-            "processing_timeout": "20-25 seconds"
+            "max_text_length": 2000
         }
     }
 
 @app.post("/process-braille")
 async def process_braille_text(request: BrailleProcessRequest):
-    """Process detected braille strings into readable text with explanation"""
-    
+    """Process detected braille strings"""
     if not request.detected_strings:
         raise HTTPException(status_code=400, detail="No braille strings provided")
     
@@ -182,7 +145,7 @@ async def process_braille_text(request: BrailleProcessRequest):
                 "interpreted_text": result.text,
                 "explanation": result.explanation,
                 "confidence": round(result.confidence, 3),
-                "input_strings": request.detected_strings[:10],  # Limit for response size
+                "input_strings": request.detected_strings[:10],
                 "processing_timestamp": datetime.now().isoformat()
             },
             "metadata": {
@@ -194,7 +157,7 @@ async def process_braille_text(request: BrailleProcessRequest):
     except asyncio.TimeoutError:
         raise HTTPException(status_code=408, detail="Processing timeout")
     except Exception as e:
-        # Fallback result
+        # Fallback response
         fallback_text = ' '.join(request.detected_strings)
         return {
             "success": True,
@@ -216,7 +179,6 @@ async def process_braille_text(request: BrailleProcessRequest):
 @app.post("/chat")
 async def chat_with_assistant(request: ChatRequest):
     """Chat with AI assistant"""
-    
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
     
@@ -225,7 +187,6 @@ async def chat_with_assistant(request: ChatRequest):
     try:
         ai_assistant = get_assistant()
         
-        # Process with timeout
         response_text = await asyncio.wait_for(
             asyncio.to_thread(ai_assistant.chat, request.message, thread_id),
             timeout=20
@@ -238,10 +199,6 @@ async def chat_with_assistant(request: ChatRequest):
                 "user_message": request.message,
                 "assistant_response": response_text,
                 "response_timestamp": datetime.now().isoformat()
-            },
-            "metadata": {
-                "message_length": len(request.message),
-                "response_length": len(response_text)
             }
         }
         
@@ -258,7 +215,6 @@ async def chat_with_assistant(request: ChatRequest):
 @app.post("/process-text")
 async def process_general_text(request: TextProcessRequest):
     """Process general text with specific tasks"""
-    
     if not request.text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty")
     
@@ -269,7 +225,6 @@ async def process_general_text(request: TextProcessRequest):
     try:
         ai_assistant = get_assistant()
         
-        # Process with timeout
         response = await asyncio.wait_for(
             asyncio.to_thread(ai_assistant.process_text, request.text, request.task, request.max_length),
             timeout=20
@@ -282,11 +237,6 @@ async def process_general_text(request: TextProcessRequest):
                 "processed_text": response,
                 "task_performed": request.task,
                 "processing_timestamp": datetime.now().isoformat()
-            },
-            "metadata": {
-                "original_length": len(request.text),
-                "processed_length": len(response),
-                "task": request.task
             }
         }
         
@@ -302,8 +252,7 @@ async def process_general_text(request: TextProcessRequest):
 
 @app.post("/batch-process")
 async def batch_process_texts(request: BatchProcessRequest):
-    """Process multiple texts in batch (limited to 5 for performance)"""
-    
+    """Process multiple texts in batch"""
     if len(request.texts) > 5:
         raise HTTPException(status_code=400, detail="Maximum 5 texts allowed per batch")
     
@@ -384,14 +333,40 @@ async def internal_error_handler(request, exc):
         content={"error": "Internal server error", "detail": str(exc)}
     )
 
-# For Vercel - Mangum handler
+# Vercel handler - Fixed version
 try:
     from mangum import Mangum
-    handler = Mangum(app, lifespan="off")
+    # Use lifespan="off" to avoid issues with Vercel
+    handler = Mangum(app, lifespan="off", api_gateway_base_path="/")
 except ImportError:
-    # Fallback if mangum isn't available
-    def handler(event, context):
-        return {"statusCode": 500, "body": "Mangum not available"}
+    # Create a simple ASGI handler if mangum fails
+    async def handler(scope, receive, send):
+        if scope["type"] == "http":
+            await app(scope, receive, send)
+        else:
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [[b"content-type", b"application/json"]],
+            })
+            await send({
+                "type": "http.response.body",
+                "body": b'{"error": "Unsupported request type"}',
+            })
 
-# Export app for direct usage
-__all__ = ["app", "handler"]
+# Alternative handler for Vercel compatibility
+def lambda_handler(event, context):
+    """Alternative handler for better Vercel compatibility"""
+    try:
+        from mangum import Mangum
+        mangum_handler = Mangum(app, lifespan="off")
+        return mangum_handler(event, context)
+    except Exception as e:
+        return {
+            "statusCode": 500,
+            "headers": {"Content-Type": "application/json"},
+            "body": f'{{"error": "Handler error: {str(e)}"}}'
+        }
+
+# Export both handlers
+__all__ = ["app", "handler", "lambda_handler"]

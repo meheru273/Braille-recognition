@@ -1,50 +1,64 @@
-# api/index.py - Vercel entry point
+# api/index.py - Vercel-compatible entry point
 from fastapi import FastAPI, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from mangum import Mangum
 from typing import List, Dict, Optional
 from datetime import datetime
 import uuid
 import asyncio
+import sys
+import os
 
 # Import lightweight assistant
 try:
-    import sys
-    import os
     # Add parent directory to path so we can import assistant.py
-    sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+    
     from assistant import BrailleAssistant
 except ImportError as e:
     print(f"Import error: {e}")
-    print("Make sure assistant.py is in the parent directory")
+    print(f"Current dir: {os.getcwd()}")
+    print(f"Files in current dir: {os.listdir('.')}")
+    print(f"Files in parent dir: {os.listdir('..')}")
+    BrailleAssistant = None
 
 # Initialize FastAPI
 app = FastAPI(
     title="AI Assistant API",
     description="Lightweight AI Assistant for text processing and chat",
-    version="2.0.0"
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
-# Minimal CORS middleware
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET", "POST"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# Lazy load assistant
+# Global assistant instance
 assistant = None
 
 def get_assistant():
     """Lazy load assistant to reduce cold start time"""
     global assistant
     if assistant is None:
+        if BrailleAssistant is None:
+            raise HTTPException(
+                status_code=503, 
+                detail="Assistant module not available. Check assistant.py import."
+            )
         try:
             assistant = BrailleAssistant()
         except Exception as e:
-            raise HTTPException(status_code=503, detail=f"Assistant unavailable: {e}")
+            raise HTTPException(status_code=503, detail=f"Assistant initialization failed: {e}")
     return assistant
 
 @app.get("/")
@@ -54,7 +68,71 @@ async def root():
         "service": "AI Assistant API",
         "status": "active",
         "version": "2.0.0",
-        "type": "lightweight"
+        "type": "lightweight",
+        "assistant_available": BrailleAssistant is not None,
+        "endpoints": [
+            "/",
+            "/health",
+            "/capabilities",
+            "/process-braille",
+            "/chat",
+            "/process-text",
+            "/batch-process"
+        ]
+    }
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    try:
+        assistant_ready = assistant is not None
+        assistant_available = BrailleAssistant is not None
+        
+        return {
+            "service": "AI Assistant API",
+            "status": "healthy",
+            "version": "2.0.0",
+            "type": "lightweight",
+            "assistant_available": assistant_available,
+            "assistant_ready": assistant_ready,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {
+            "service": "AI Assistant API",
+            "status": "degraded",
+            "version": "2.0.0",
+            "type": "lightweight",
+            "assistant_available": False,
+            "assistant_ready": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+@app.get("/capabilities")
+async def get_capabilities():
+    """Get assistant capabilities"""
+    return {
+        "version": "2.0.0",
+        "type": "lightweight",
+        "capabilities": {
+            "braille_processing": True,
+            "general_chat": True,
+            "text_processing": True,
+            "batch_processing": True,
+            "wikipedia_search": True
+        },
+        "supported_tasks": ["explain", "summarize", "correct", "enhance", "analyze"],
+        "limits": {
+            "max_batch_size": 5,
+            "max_text_length": 2000,
+            "max_response_length": 500
+        },
+        "performance": {
+            "bundle_size": "~5MB (vs 80MB+ with LangChain)",
+            "cold_start": "3-8 seconds",
+            "processing_timeout": "20-25 seconds"
+        }
     }
 
 @app.post("/process-braille")
@@ -105,7 +183,7 @@ async def process_braille_text(
             "session_id": session_id,
             "processing_result": {
                 "interpreted_text": fallback_text,
-                "explanation": f"Basic text assembly. AI processing failed.",
+                "explanation": f"Basic text assembly. AI processing failed: {str(e)}",
                 "confidence": 0.3,
                 "input_strings": detected_strings[:10],
                 "processing_timestamp": datetime.now().isoformat()
@@ -219,14 +297,18 @@ async def batch_process_texts(
 ):
     """Process multiple texts in batch (limited to 5 for performance)"""
     
-    if len(texts) > 5:  # Reduced for lightweight version
+    if len(texts) > 5:
         raise HTTPException(status_code=400, detail="Maximum 5 texts allowed per batch")
     
     valid_tasks = ["explain", "summarize", "correct", "enhance", "analyze"]
     if task not in valid_tasks:
         raise HTTPException(status_code=400, detail=f"Task must be one of: {valid_tasks}")
     
-    ai_assistant = get_assistant()
+    try:
+        ai_assistant = get_assistant()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Assistant unavailable: {e}")
+    
     results = []
     
     for i, text in enumerate(texts):
@@ -265,7 +347,7 @@ async def batch_process_texts(
                 "error": str(e)
             })
     
-    successful_results = [r for r in results if r['success']]
+    successful_results = [r for r in results if r.get('success', False)]
     
     return {
         "success": True,
@@ -277,67 +359,43 @@ async def batch_process_texts(
         }
     }
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    try:
-        assistant_ready = assistant is not None
-        return {
-            "service": "AI Assistant API",
-            "status": "healthy",
-            "version": "2.0.0",
-            "type": "lightweight",
-            "assistant_ready": assistant_ready
-        }
-    except:
-        return {
-            "service": "AI Assistant API",
-            "status": "healthy",
-            "version": "2.0.0",
-            "type": "lightweight",
-            "assistant_ready": False
-        }
-
-@app.get("/capabilities")
-async def get_capabilities():
-    """Get assistant capabilities"""
-    return {
-        "version": "2.0.0",
-        "type": "lightweight",
-        "capabilities": {
-            "braille_processing": True,
-            "general_chat": True,
-            "text_processing": True,
-            "batch_processing": True,
-            "wikipedia_search": True
-        },
-        "supported_tasks": ["explain", "summarize", "correct", "enhance", "analyze"],
-        "limits": {
-            "max_batch_size": 5,
-            "max_text_length": 2000,
-            "max_response_length": 500
-        },
-        "performance": {
-            "bundle_size": "~5MB (vs 80MB+ with LangChain)",
-            "cold_start": "3-8 seconds",
-            "processing_timeout": "20-25 seconds"
-        }
-    }
-
-# Minimal error handlers
+# Error handlers
 @app.exception_handler(404)
 async def not_found_handler(request, exc):
     return JSONResponse(
         status_code=404,
-        content={"error": "Endpoint not found"}
+        content={
+            "error": "Endpoint not found", 
+            "available_endpoints": ["/", "/health", "/capabilities", "/process-braille", "/chat", "/process-text", "/batch-process"]
+        }
     )
 
 @app.exception_handler(500)
 async def internal_error_handler(request, exc):
     return JSONResponse(
         status_code=500,
-        content={"error": "Internal server error"}
+        content={"error": "Internal server error", "detail": str(exc)}
     )
 
-# Vercel handler - this is what Vercel will call
-handler = Mangum(app)
+# For Vercel - this is the main handler function
+def handler(request):
+    """Main handler for Vercel serverless function"""
+    import uvicorn
+    from uvicorn.middleware.asgi2 import ASGI2Middleware
+    
+    # Create ASGI2 middleware wrapper
+    asgi_app = ASGI2Middleware(app)
+    
+    # Handle the request
+    return asgi_app(request)
+
+# Alternative handler using mangum (if the above doesn't work)
+try:
+    from mangum import Mangum
+    # Create mangum handler as backup
+    mangum_handler = Mangum(app, lifespan="off")
+except ImportError:
+    mangum_handler = None
+
+# Export both handlers for flexibility
+__all__ = ["app", "handler", "mangum_handler"]

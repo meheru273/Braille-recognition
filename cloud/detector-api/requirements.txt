@@ -5,8 +5,8 @@ python-multipart==0.0.9
 python-dotenv==1.0.1
 
 # Braille detection dependencies
-inference-sdk==0.45.0  # Correct name with hyphen, NOT underscore
+inference-sdk==0.45.0
 Pillow==10.3.0
 
-# HTTP client for Firebase service communication
-requests==2.31.0
+# HTTP client (let pip resolve the correct version)
+requests

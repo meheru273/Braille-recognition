@@ -1,8 +1,9 @@
-# Lightweight requirements.txt without inference-sdk
-fastapi==0.111.0
-mangum==0.18.0
-Pillow==10.3.0
-python-dotenv==1.0.1
+# Lightweight requirements optimized for Vercel's 250MB memory limit
 requests==2.31.0
+python-dotenv==1.0.1
 
-# Removed inference-sdk to reduce bundle size significantly
+# Removed heavy dependencies:
+# - inference_sdk (too large for Vercel)
+# - fastapi (not needed for simple HTTP server)
+# - mangum (not needed for simple HTTP server)
+# - Pillow (not needed for base64 image processing)

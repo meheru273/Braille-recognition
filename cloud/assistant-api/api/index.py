@@ -265,32 +265,38 @@ class BrailleDetector:
         except Exception as e:
             raise Exception(f"Failed to encode image: {e}")
     
+
+# ... other parts of your BrailleDetector class ...
+
     def detect_braille_from_bytes(self, image_bytes: bytes) -> Optional[Dict]:
-           
+        """
+        Run Braille detection using image bytes.
+        Includes detailed debugging logs.
+        """
+        print("--- START detect_braille_from_bytes ---")
         if not self.api_key:
-            error_msg = "ROBOFLOW_API_KEY not configured"
+            error_msg = "ROBOFLOW_API_KEY environment variable not set."
             print(f"ERROR: {error_msg}")
-            return {"error": error_msg}
+            print("--- END detect_braille_from_bytes (FAILURE) ---")
+            return {"error": "Detection configuration error", "detail": error_msg}
 
         try:
+            print(f"1. Encoding image bytes (size: {len(image_bytes)} bytes)...")
             encoded_image = self._encode_image_from_bytes(image_bytes)
-            print(f"DEBUG: Image encoded. Length: {len(encoded_image)} chars")
+            print(f"   -> Encoded image length: {len(encoded_image)} characters")
 
-            # --- Potentially try different base URLs ---
-            # Primary: detect.roboflow.com (Standard Serverless Inference)
-            # Fallback: serverless.roboflow.com (Sometimes used, though less common for direct workflow calls now)
-            urls_to_try = [
-                f"{self.base_url.rstrip('/')}/{self.workspace_name}/{self.workflow_id}".rstrip('/'),
-                f"https://serverless.roboflow.com/{self.workspace_name}/workflows/{self.workflow_id}" # Fallback structure
-            ]
+            # --- Prepare Request Details ---
+            # --- Option 1: Standard Serverless Inference Endpoint (More likely correct now) ---
+            url_option_1 = f"https://detect.roboflow.com/{self.workspace_name}/{self.workflow_id}"
+            # --- Option 2: Legacy/Alternative Serverless Endpoint ---
+            url_option_2 = f"https://serverless.roboflow.com/{self.workspace_name}/workflows/{self.workflow_id}"
 
             headers = {
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}"
+                "Authorization": f"Bearer {self.api_key}" # Use Bearer token
             }
-            print(f"DEBUG: Headers: {headers}")
-
             payload = {
+                # "api_key": self.api_key, # DO NOT include api_key in the JSON body for this endpoint
                 "inputs": {
                     "image": {
                         "type": "base64",
@@ -298,63 +304,100 @@ class BrailleDetector:
                     }
                 }
             }
-            print(f"DEBUG: Payload prepared.")
-
-            params = {"api_key": self.api_key}
-            print(f"DEBUG: Params: {params}")
-
-            last_error_response_text = ""
-            last_status_code = None
-
-            # Try different potential URLs
-            for i, url in enumerate(urls_to_try):
-                print(f"ATTEMPT {i+1}: Trying API URL: {url}")
-                try:
-                    response = requests.post(
-                        url,
-                        headers=headers,
-                        json=payload,
-                        params=params,
-                        timeout=30
-                    )
-                    print(f"ATTEMPT {i+1}: Response Status Code: {response.status_code}")
-
-                    if response.status_code == 200:
-                        result_data = response.json()
-                        print(f"ATTEMPT {i+1}: SUCCESS! API request successful.")
-                        return result_data
-                    else:
-                        # Capture error details for this attempt
-                        last_status_code = response.status_code
-                        last_error_response_text = response.text
-                        print(f"ATTEMPT {i+1}: FAILED. Response Text: {last_error_response_text}")
-                        try:
-                            error_json = response.json()
-                            print(f"ATTEMPT {i+1}: Parsed Error JSON: {error_json}")
-                        except:
-                            print(f"ATTEMPT {i+1}: Response body is not valid JSON.")
-                        # Don't return yet, try the next URL if available
-
-                except requests.exceptions.RequestException as req_err:
-                    print(f"ATTEMPT {i+1}: Request Exception: {req_err}")
-                    last_error_response_text = str(req_err)
-                    last_status_code = "Request Error"
-
-            # If we get here, all attempts failed
-            error_msg = f"All API attempts failed. Last error (Status {last_status_code}): {last_error_response_text}"
-            print(f"ERROR: {error_msg}")
-            return {
-                "error": "Detection failed",
-                "detail": error_msg,
-                "status_code": last_status_code
+            params = {
+                "api_key": self.api_key # Pass API key as a query parameter
             }
 
+            print(f"2. Prepared Request Details:")
+            print(f"   -> Trying URL Option 1: {url_option_1}")
+            # Mask key for security in logs
+            masked_key = self.api_key[:5] + '*' * (len(self.api_key) - 10) + self.api_key[-5:] if len(self.api_key) > 10 else '*' * len(self.api_key)
+            print(f"   -> Headers: {{'Content-Type': 'application/json', 'Authorization': 'Bearer {masked_key}'}}")
+            print(f"   -> Query Params: {{'api_key': '{masked_key}'}}")
+            # print(f"   -> Payload (Inputs Snippet): {{'inputs': {{'image': {{'type': 'base64', 'value': '{encoded_image[:50]}...'}}}}}}") # Optional: log snippet
+
+            # --- Make the Request ---
+            print("3. Sending POST request...")
+            try:
+                response = requests.post(
+                    url_option_1, # Try the primary URL first
+                    headers=headers,
+                    json=payload,
+                    params=params,
+                    timeout=30 # seconds
+                )
+                print(f"4. Received Response:")
+                print(f"   -> Status Code: {response.status_code}")
+                print(f"   -> Response Headers: {dict(response.headers)}")
+
+                # --- Handle Response ---
+                if response.status_code == 200:
+                    print("   -> Status 200 OK. Parsing JSON response...")
+                    result_data = response.json()
+                    print(f"   -> Successfully parsed response. Keys: {list(result_data.keys()) if isinstance(result_data, dict) else type(result_data)}")
+                    print("--- END detect_braille_from_bytes (SUCCESS) ---")
+                    return result_data
+                else:
+                    print(f"   -> Status {response.status_code} indicates failure.")
+                    error_detail = response.text
+                    print(f"   -> Raw Response Text: {error_detail[:500]}...") # Log first 500 chars of error
+                    try:
+                        error_json = response.json()
+                        print(f"   -> Parsed Error JSON: {error_json}")
+                        # Extract common error message fields
+                        error_detail = error_json.get('message', error_json.get('error', error_detail))
+                    except Exception as parse_err:
+                        print(f"   -> Could not parse response text as JSON: {parse_err}")
+
+                    # If 404 on primary URL, try the alternative URL quickly
+                    if response.status_code == 404:
+                        print("   -> Trying alternative URL due to 404...")
+                        try:
+                            alt_response = requests.post(
+                                url_option_2,
+                                headers=headers,
+                                json=payload,
+                                params=params,
+                                timeout=15
+                            )
+                            print(f"   -> Alt URL Response Status: {alt_response.status_code}")
+                            if alt_response.status_code == 200:
+                                print("   -> Alt URL Success!")
+                                return alt_response.json()
+                            else:
+                                alt_error_detail = alt_response.text
+                                print(f"   -> Alt URL also failed. Text: {alt_error_detail[:300]}...")
+                        except Exception as alt_err:
+                            print(f"   -> Error trying alternative URL: {alt_err}")
+
+                    final_error_msg = f"Roboflow API returned status {response.status_code}. Details: {error_detail}"
+                    print(f"ERROR: {final_error_msg}")
+                    print("--- END detect_braille_from_bytes (FAILURE) ---")
+                    return {
+                        "error": "Detection failed",
+                        "detail": final_error_msg,
+                        "status_code": response.status_code
+                    }
+
+            except requests.exceptions.Timeout:
+                error_msg = "Request to Roboflow API timed out after 30 seconds."
+                print(f"ERROR: {error_msg}")
+                print("--- END detect_braille_from_bytes (FAILURE) ---")
+                return {"error": "Detection timeout", "detail": error_msg}
+            except requests.exceptions.RequestException as req_err:
+                error_msg = f"Network error during API request: {req_err}"
+                print(f"ERROR: {error_msg}")
+                print("--- END detect_braille_from_bytes (FAILURE) ---")
+                return {"error": "Detection network error", "detail": error_msg}
+
         except Exception as e:
-            error_msg = f"Unexpected error during detection setup: {str(e)}"
+            error_msg = f"Unexpected error inside detect_braille_from_bytes: {e}"
             print(f"ERROR: {error_msg}")
             traceback.print_exc()
-            return {"error": error_msg}
+            print("--- END detect_braille_from_bytes (FAILURE) ---")
+            return {"error": "Detection internal error", "detail": error_msg}
 
+# ... rest of your BrailleDetector class ...
         
     
     def extract_predictions(self, result: Dict) -> List[Dict]:

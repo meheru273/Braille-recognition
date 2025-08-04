@@ -1,8 +1,4 @@
-# Lightweight requirements.txt without inference-sdk
-fastapi==0.111.0
-mangum==0.18.0
-Pillow==10.3.0
-python-dotenv==1.0.1
+Pillow==10.0.1
+inference-sdk==0.9.12
+python-dotenv==1.0.0
 requests==2.31.0
-
-# Removed inference-sdk to reduce bundle size significantly

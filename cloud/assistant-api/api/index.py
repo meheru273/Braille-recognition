@@ -10,7 +10,9 @@ from dataclasses import dataclass
 import sys
 import traceback
 import io
-import tempfile
+
+# inference_sdk removed to stay within Vercel's 250MB memory limit
+INFERENCE_SDK_AVAILABLE = False
 
 # ============================================================================
 # BRAILLE ASSISTANT CLASSES
@@ -254,19 +256,27 @@ class BrailleDetector:
         if env_key:
             self.api_key = env_key
         else:
-            # Use the provided API key as fallback - this might need to be a full Roboflow API key
+            # Use the provided API key as fallback
             self.api_key = "RzOXFbriJONcee7MHKN8"
             print("Using fallback API key - consider setting ROBOFLOW_API_KEY environment variable")
-            print("Note: The fallback key might be incomplete. Please check your Roboflow API key.")
+            print("Note: This API key appears to be incomplete. A full Roboflow API key is typically 32+ characters.")
         
         if not self.api_key:
-            print("Warning: No Roboflow API key available - detection will be disabled")
+            print("ERROR: No Roboflow API key available - detection will be disabled")
+            print("To fix this:")
+            print("1. Go to https://roboflow.com/account")
+            print("2. Copy your API key")
+            print("3. Set the ROBOFLOW_API_KEY environment variable")
+            print("4. Restart the application")
         else:
             print(f"Using Roboflow API key: {self.api_key[:5]}...{self.api_key[-5:]}")
             
         self.workspace_name = "braille-to-text-0xo2p"
         self.workflow_id = "custom-workflow"
         self.base_url = "https://serverless.roboflow.com"
+        
+        # inference_sdk removed to stay within Vercel's 250MB memory limit
+        self.client = None
     
     def _encode_image_from_bytes(self, image_bytes: bytes) -> str:
         """Encode image bytes to base64 string"""
@@ -282,132 +292,106 @@ class BrailleDetector:
     def detect_braille_from_bytes(self, image_bytes: bytes) -> Optional[Dict]:
         """
         Run Braille detection using image bytes.
-        Includes detailed debugging logs.
+        Uses direct HTTP requests (inference_sdk removed for Vercel memory limit).
         """
         print("--- START detect_braille_from_bytes ---")
         if not self.api_key:
-            error_msg = "ROBOFLOW_API_KEY environment variable not set."
+            error_msg = "Roboflow API key not configured. Please set ROBOFLOW_API_KEY environment variable."
             print(f"ERROR: {error_msg}")
             print("--- END detect_braille_from_bytes (FAILURE) ---")
             return {"error": "Detection configuration error", "detail": error_msg}
 
         try:
-            print(f"1. Encoding image bytes (size: {len(image_bytes)} bytes)...")
+            print(f"1. Processing image bytes (size: {len(image_bytes)} bytes)...")
+            
+            # Use direct HTTP requests (inference_sdk removed for Vercel memory limit)
+            print("2. Using direct HTTP requests...")
             encoded_image = self._encode_image_from_bytes(image_bytes)
             print(f"   -> Encoded image length: {len(encoded_image)} characters")
 
-            # --- Prepare Request Details ---
-            # --- Option 1: Standard Serverless Inference Endpoint (More likely correct now) ---
+            # Prepare request details - try both endpoint formats
             url_option_1 = f"{self.base_url}/{self.workspace_name}/workflows/{self.workflow_id}"
-            # --- Option 2: Legacy/Alternative Serverless Endpoint ---
             url_option_2 = f"https://detect.roboflow.com/{self.workspace_name}/{self.workflow_id}"
+            
+            headers = {"Content-Type": "application/json"}
+            payload = {"image": encoded_image}
+            params = {"api_key": self.api_key}
 
-            headers = {
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "image": encoded_image
-            }
-            params = {
-                "api_key": self.api_key # Pass API key as a query parameter
-            }
-
-            print(f"2. Prepared Request Details:")
-            print(f"   -> Trying URL Option 1: {url_option_1}")
-            # Mask key for security in logs
+            print(f"3. Trying first endpoint: {url_option_1}")
             masked_key = self.api_key[:5] + '*' * (len(self.api_key) - 10) + self.api_key[-5:] if len(self.api_key) > 10 else '*' * len(self.api_key)
-            print(f"   -> Headers: {{'Content-Type': 'application/json'}}")
-            print(f"   -> Query Params: {{'api_key': '{masked_key}'}}")
-            print(f"   -> Payload structure: {{'image': 'base64_string'}}")
-            print(f"   -> Image size: {len(encoded_image)} characters")
+            print(f"   -> API Key: {masked_key}")
 
-            # --- Make the Request ---
-            print("3. Sending POST request...")
-            try:
-                response = requests.post(
-                    url_option_1, # Try the primary URL first
-                    headers=headers,
-                    json=payload,
-                    params=params,
-                    timeout=30 # seconds
-                )
-                print(f"4. Received Response:")
-                print(f"   -> Status Code: {response.status_code}")
-                print(f"   -> Response Headers: {dict(response.headers)}")
-
-                # --- Handle Response ---
-                if response.status_code == 200:
-                    print("   -> Status 200 OK. Parsing JSON response...")
-                    result_data = response.json()
-                    print(f"   -> Successfully parsed response. Keys: {list(result_data.keys()) if isinstance(result_data, dict) else type(result_data)}")
-                    print(f"   -> Response type: {type(result_data)}")
-                    if isinstance(result_data, dict):
-                        print(f"   -> Response keys: {list(result_data.keys())}")
-                    elif isinstance(result_data, list):
-                        print(f"   -> Response list length: {len(result_data)}")
-                    print("--- END detect_braille_from_bytes (SUCCESS) ---")
-                    return result_data
-                else:
-                    print(f"   -> Status {response.status_code} indicates failure.")
-                    error_detail = response.text
-                    print(f"   -> Raw Response Text: {error_detail[:500]}...") # Log first 500 chars of error
-                    try:
-                        error_json = response.json()
-                        print(f"   -> Parsed Error JSON: {error_json}")
-                        # Extract common error message fields
-                        error_detail = error_json.get('message', error_json.get('error', error_detail))
-                    except Exception as parse_err:
-                        print(f"   -> Could not parse response text as JSON: {parse_err}")
-
-                    # If 404 on primary URL, try the alternative URL quickly
-                    if response.status_code == 404:
-                        print("   -> Trying alternative URL due to 404...")
-                        try:
-                            # For the alternative URL, use the original payload structure
-                            alt_payload = {
-                                "inputs": {
-                                    "image": {
-                                        "type": "base64",
-                                        "value": encoded_image
-                                    }
-                                }
-                            }
-                            alt_response = requests.post(
-                                url_option_2,
-                                headers=headers,
-                                json=alt_payload,
-                                params=params,
-                                timeout=15
-                            )
-                            print(f"   -> Alt URL Response Status: {alt_response.status_code}")
-                            if alt_response.status_code == 200:
-                                print("   -> Alt URL Success!")
-                                return alt_response.json()
-                            else:
-                                alt_error_detail = alt_response.text
-                                print(f"   -> Alt URL also failed. Text: {alt_error_detail[:300]}...")
-                        except Exception as alt_err:
-                            print(f"   -> Error trying alternative URL: {alt_err}")
-
-                    final_error_msg = f"Roboflow API returned status {response.status_code}. Details: {error_detail}"
-                    print(f"ERROR: {final_error_msg}")
-                    print("--- END detect_braille_from_bytes (FAILURE) ---")
-                    return {
-                        "error": "Detection failed",
-                        "detail": final_error_msg,
-                        "status_code": response.status_code
+            # Try first endpoint
+            response = requests.post(
+                url_option_1,
+                headers=headers,
+                json=payload,
+                params=params,
+                timeout=30
+            )
+            
+            # If first endpoint fails, try alternative
+            if response.status_code != 200:
+                print(f"   -> First endpoint failed (status {response.status_code}), trying alternative...")
+                print(f"   -> Trying alternative endpoint: {url_option_2}")
+                
+                # For the alternative endpoint, use different payload structure
+                alt_payload = {
+                    "inputs": {
+                        "image": {
+                            "type": "base64",
+                            "value": encoded_image
+                        }
                     }
+                }
+                
+                response = requests.post(
+                    url_option_2,
+                    headers=headers,
+                    json=alt_payload,
+                    params=params,
+                    timeout=30
+                )
+            
+            print(f"4. Received Response:")
+            print(f"   -> Status Code: {response.status_code}")
 
-            except requests.exceptions.Timeout:
-                error_msg = "Request to Roboflow API timed out after 30 seconds."
-                print(f"ERROR: {error_msg}")
+            if response.status_code == 200:
+                result_data = response.json()
+                print(f"   -> Successfully parsed response")
+                print(f"   -> Response type: {type(result_data)}")
+                if isinstance(result_data, dict):
+                    print(f"   -> Response keys: {list(result_data.keys())}")
+                    # Check for specific keys that indicate success
+                    if "predictions" in result_data:
+                        pred_count = len(result_data["predictions"]) if isinstance(result_data["predictions"], list) else 0
+                        print(f"   -> Found {pred_count} predictions in response")
+                    elif "outputs" in result_data:
+                        print(f"   -> Found 'outputs' key in response")
+                elif isinstance(result_data, list):
+                    print(f"   -> Response list length: {len(result_data)}")
+                    if len(result_data) > 0 and isinstance(result_data[0], dict):
+                        print(f"   -> First item keys: {list(result_data[0].keys())}")
+                print("--- END detect_braille_from_bytes (SUCCESS) ---")
+                return result_data
+            else:
+                error_detail = response.text
+                print(f"   -> Error response: {error_detail[:500]}...")
+                
+                try:
+                    error_json = response.json()
+                    error_detail = error_json.get('message', error_json.get('error', error_detail))
+                except:
+                    pass
+
+                final_error_msg = f"Roboflow API returned status {response.status_code}. Details: {error_detail}"
+                print(f"ERROR: {final_error_msg}")
                 print("--- END detect_braille_from_bytes (FAILURE) ---")
-                return {"error": "Detection timeout", "detail": error_msg}
-            except requests.exceptions.RequestException as req_err:
-                error_msg = f"Network error during API request: {req_err}"
-                print(f"ERROR: {error_msg}")
-                print("--- END detect_braille_from_bytes (FAILURE) ---")
-                return {"error": "Detection network error", "detail": error_msg}
+                return {
+                    "error": "Detection failed",
+                    "detail": final_error_msg,
+                    "status_code": response.status_code
+                }
 
         except Exception as e:
             error_msg = f"Unexpected error inside detect_braille_from_bytes: {e}"
@@ -577,8 +561,27 @@ class handler(BaseHTTPRequestHandler):
                     'status': 'healthy',
                     'features': ['braille_detection', 'ai_assistant', 'chat'],
                     'roboflow_configured': bool(self.detector.api_key),
-                    'ai_configured': bool(self.assistant.llm.api_key)
+                    'ai_configured': bool(self.assistant.llm.api_key),
+                    'roboflow_key_length': len(self.detector.api_key) if self.detector.api_key else 0,
+                    'inference_sdk_available': False,
+                    'inference_client_ready': False
                 })
+            elif path == '/test-api':
+                if not self.detector.api_key:
+                    self.send_json_response({
+                        'error': 'API key not configured',
+                        'message': 'Please set ROBOFLOW_API_KEY environment variable'
+                    }, 400)
+                else:
+                    self.send_json_response({
+                        'status': 'API key configured',
+                        'key_length': len(self.detector.api_key),
+                        'workspace': self.detector.workspace_name,
+                        'workflow': self.detector.workflow_id,
+                        'inference_sdk_available': False,
+                        'inference_client_ready': False,
+                        'api_url': self.detector.base_url
+                    })
             elif path.startswith('/favicon'):
                 self.send_response(404)
                 self.end_headers()
@@ -1164,6 +1167,31 @@ class handler(BaseHTTPRequestHandler):
                 if (!status.roboflow_configured) {
                     document.getElementById('detectBtn').title = "Roboflow API key not configured";
                     document.getElementById('processBtn').title = "Roboflow API key not configured";
+                    document.getElementById('detectBtn').disabled = true;
+                    document.getElementById('processBtn').disabled = true;
+                    
+                    // Show warning message
+                    const warningDiv = document.createElement('div');
+                    warningDiv.style.cssText = 'background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 15px; border-radius: 5px; margin-bottom: 20px;';
+                    warningDiv.innerHTML = `
+                        <strong>⚠️ Configuration Required:</strong><br>
+                        Roboflow API key not configured. Please set the ROBOFLOW_API_KEY environment variable.<br>
+                        <a href="https://roboflow.com/account" target="_blank">Get your API key here</a>
+                    `;
+                    document.querySelector('.container').insertBefore(warningDiv, document.querySelector('.tabs'));
+                } else {
+                                         // Show SDK status (removed for Vercel memory limit)
+                     const sdkStatus = '⚠️ Using HTTP requests (SDK removed for memory optimization)';
+                    
+                    const statusDiv = document.createElement('div');
+                    statusDiv.style.cssText = 'background: #d4edda; border: 1px solid #c3e6cb; color: #155724; padding: 10px; border-radius: 5px; margin-bottom: 20px; font-size: 14px;';
+                    statusDiv.innerHTML = `
+                        <strong>🔧 System Status:</strong><br>
+                        • Roboflow API: ✓ Configured (Key length: ${status.roboflow_key_length})<br>
+                        • Inference SDK: ${sdkStatus}<br>
+                        • AI Assistant: ${status.ai_configured ? '✓ Configured' : '⚠️ Using fallback mode'}
+                    `;
+                    document.querySelector('.container').insertBefore(statusDiv, document.querySelector('.tabs'));
                 }
                 
                 console.log('System status:', status);

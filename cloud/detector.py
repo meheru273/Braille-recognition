@@ -7,22 +7,53 @@ from typing import List, Dict, Optional, Union
 from PIL import Image, ImageDraw
 import io
 
+# Import configuration
+try:
+    from config import (
+        ROBOFLOW_API_KEY, ROBOFLOW_WORKSPACE, ROBOFLOW_MODEL_VERSION,
+        ROBOFLOW_ENDPOINTS, DETECTION_CONFIDENCE_THRESHOLD, 
+        DETECTION_OVERLAP_THRESHOLD, REQUEST_TIMEOUT, validate_config
+    )
+except ImportError:
+    # Fallback configuration if config.py is not available
+    ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY", "RzOXFbriJONcee7MHKN8")
+    ROBOFLOW_WORKSPACE = "braille-to-text-0xo2p"
+    ROBOFLOW_MODEL_VERSION = "1"
+    ROBOFLOW_ENDPOINTS = [
+        f"https://detect.roboflow.com/{ROBOFLOW_WORKSPACE}/{ROBOFLOW_MODEL_VERSION}",
+        f"https://api.roboflow.com/{ROBOFLOW_WORKSPACE}/{ROBOFLOW_MODEL_VERSION}",
+        f"https://serverless.roboflow.com/{ROBOFLOW_WORKSPACE}/{ROBOFLOW_MODEL_VERSION}"
+    ]
+    DETECTION_CONFIDENCE_THRESHOLD = 0.1
+    DETECTION_OVERLAP_THRESHOLD = 0.5
+    REQUEST_TIMEOUT = 30
+
 class BrailleDetector:
     def __init__(self):
         """Initialize with minimal dependencies"""
-        self.api_key = os.getenv("ROBOFLOW_API_KEY")
+        # Use configuration
+        self.api_key = ROBOFLOW_API_KEY
+        self.workspace = ROBOFLOW_WORKSPACE
+        self.model_version = ROBOFLOW_MODEL_VERSION
+        self.endpoints = ROBOFLOW_ENDPOINTS
+        self.confidence_threshold = DETECTION_CONFIDENCE_THRESHOLD
+        self.overlap_threshold = DETECTION_OVERLAP_THRESHOLD
+        self.timeout = REQUEST_TIMEOUT
+        
+        # Validate configuration
+        config_status = validate_config() if 'validate_config' in globals() else {
+            "valid": len(self.api_key) >= 20,
+            "roboflow_configured": len(self.api_key) >= 20,
+            "api_key_length": len(self.api_key)
+        }
+        
+        if not config_status["roboflow_configured"]:
+            print("WARNING: Roboflow API key is not properly configured.")
+            print("Please set ROBOFLOW_API_KEY environment variable with a valid key (32+ characters)")
+            print(f"Current key length: {len(self.api_key)} characters")
+        
         if not self.api_key:
             raise ValueError("ROBOFLOW_API_KEY environment variable is required")
-            
-        # Updated API endpoints - try multiple formats
-        self.endpoints = [
-            # Standard Roboflow inference endpoint
-            "https://detect.roboflow.com/braille-to-text-0xo2p/1",
-            # Alternative format
-            "https://api.roboflow.com/braille-to-text-0xo2p/1",
-            # Hosted API format
-            "https://outline.roboflow.com/braille-to-text-0xo2p/1"
-        ]
         
         # Color mapping for different Braille classes
         self.class_colors = {
@@ -43,6 +74,14 @@ class BrailleDetector:
         except Exception as e:
             raise Exception(f"Failed to encode image: {e}")
     
+    def _encode_image_from_bytes(self, image_bytes: bytes) -> str:
+        """Encode image bytes to base64 string"""
+        try:
+            encoded_string = base64.b64encode(image_bytes).decode('utf-8')
+            return encoded_string
+        except Exception as e:
+            raise Exception(f"Failed to encode image: {e}")
+    
     def detect_braille_method1(self, image_path: str) -> Optional[Dict]:
         """Method 1: Standard Roboflow API with base64"""
         try:
@@ -51,12 +90,12 @@ class BrailleDetector:
             # Encode image
             encoded_image = self._encode_image(image_path)
             
-            # Prepare request
+            # Prepare request - use the correct Roboflow API format
             payload = {
                 "image": encoded_image,
                 "api_key": self.api_key,
-                "confidence": 0.1,  # Lower confidence threshold
-                "overlap": 0.5
+                "confidence": self.confidence_threshold,
+                "overlap": self.overlap_threshold
             }
             
             headers = {
@@ -64,11 +103,14 @@ class BrailleDetector:
             }
             
             print(f"Trying Method 1: {url}")
-            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            print(f"API Key length: {len(self.api_key)}")
+            response = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
+            
+            print(f"Response status: {response.status_code}")
             
             if response.status_code == 200:
                 result = response.json()
-                print(f"Method 1 success: {len(result.get('predictions', []))} predictions")
+                print(f"Method 1 success: Response keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
                 return result
             else:
                 print(f"Method 1 failed: {response.status_code} - {response.text[:200]}")
@@ -90,16 +132,18 @@ class BrailleDetector:
                 
                 data = {
                     'api_key': self.api_key,
-                    'confidence': '0.1',
-                    'overlap': '0.5'
+                    'confidence': str(self.confidence_threshold),
+                    'overlap': str(self.overlap_threshold)
                 }
                 
                 print(f"Trying Method 2: {url}")
-                response = requests.post(url, files=files, data=data, timeout=30)
+                response = requests.post(url, files=files, data=data, timeout=self.timeout)
+                
+                print(f"Response status: {response.status_code}")
                 
                 if response.status_code == 200:
                     result = response.json()
-                    print(f"Method 2 success: {len(result.get('predictions', []))} predictions")
+                    print(f"Method 2 success: Response keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
                     return result
                 else:
                     print(f"Method 2 failed: {response.status_code} - {response.text[:200]}")
@@ -112,7 +156,7 @@ class BrailleDetector:
     def detect_braille_method3(self, image_path: str) -> Optional[Dict]:
         """Method 3: URL parameter format"""
         try:
-            url = f"{self.endpoints[0]}?api_key={self.api_key}&confidence=0.1&overlap=0.5"
+            url = f"{self.endpoints[0]}?api_key={self.api_key}&confidence={self.confidence_threshold}&overlap={self.overlap_threshold}"
             
             encoded_image = self._encode_image(image_path)
             
@@ -123,11 +167,13 @@ class BrailleDetector:
             }
             
             print(f"Trying Method 3: {url}")
-            response = requests.post(url, data=payload, headers=headers, timeout=30)
+            response = requests.post(url, data=payload, headers=headers, timeout=self.timeout)
+            
+            print(f"Response status: {response.status_code}")
             
             if response.status_code == 200:
                 result = response.json()
-                print(f"Method 3 success: {len(result.get('predictions', []))} predictions")
+                print(f"Method 3 success: Response keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
                 return result
             else:
                 print(f"Method 3 failed: {response.status_code} - {response.text[:200]}")
@@ -148,8 +194,8 @@ class BrailleDetector:
                 payload = {
                     "image": encoded_image,
                     "api_key": self.api_key,
-                    "confidence": 0.1,
-                    "overlap": 0.5
+                    "confidence": self.confidence_threshold,
+                    "overlap": self.overlap_threshold
                 }
                 
                 headers = {
@@ -157,11 +203,13 @@ class BrailleDetector:
                 }
                 
                 print(f"Trying Method 4.{i}: {url}")
-                response = requests.post(url, json=payload, headers=headers, timeout=30)
+                response = requests.post(url, json=payload, headers=headers, timeout=self.timeout)
+                
+                print(f"Response status: {response.status_code}")
                 
                 if response.status_code == 200:
                     result = response.json()
-                    print(f"Method 4.{i} success: {len(result.get('predictions', []))} predictions")
+                    print(f"Method 4.{i} success: Response keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
                     return result
                 else:
                     print(f"Method 4.{i} failed: {response.status_code}")
@@ -171,6 +219,32 @@ class BrailleDetector:
                 continue
         
         return None
+    
+    def detect_braille_from_bytes(self, image_bytes: bytes) -> Optional[Dict]:
+        """Detect braille from image bytes"""
+        try:
+            # Create a temporary file-like object
+            with io.BytesIO(image_bytes) as temp_file:
+                # Save to a temporary file
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_path:
+                    temp_path.write(image_bytes)
+                    temp_path.flush()
+                    
+                    # Use the existing detection method
+                    result = self.detect_braille_with_fallback(temp_path.name)
+                    
+                    # Clean up
+                    import os
+                    try:
+                        os.unlink(temp_path.name)
+                    except:
+                        pass
+                    
+                    return result
+        except Exception as e:
+            print(f"Error in detect_braille_from_bytes: {e}")
+            return None
     
     def detect_braille_with_fallback(self, image_path: str) -> Optional[Dict]:
         """Try all detection methods with fallback"""
@@ -200,7 +274,7 @@ class BrailleDetector:
         for i, method in enumerate(methods, 1):
             print(f"\n--- Trying Detection Method {i} ---")
             result = method(image_path)
-            if result and result.get('predictions'):
+            if result:
                 print(f"✓ Method {i} successful!")
                 return result
             else:
@@ -222,22 +296,34 @@ class BrailleDetector:
             predictions = []
             
             # Debug: Print result structure
-            print(f"Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
-            
-            # Handle different response structures
+            print(f"Result type: {type(result)}")
             if isinstance(result, dict):
-                # Direct predictions
+                print(f"Result keys: {list(result.keys())}")
+            elif isinstance(result, list):
+                print(f"Result length: {len(result)}")
+            
+            # Handle different response structures from Roboflow
+            if isinstance(result, dict):
+                # Standard Roboflow response format
                 if "predictions" in result:
                     predictions = result["predictions"]
-                # Sometimes wrapped in another layer
+                # Sometimes wrapped in data
                 elif "data" in result and "predictions" in result["data"]:
                     predictions = result["data"]["predictions"]
                 # Check for other common structures
                 elif "detections" in result:
                     predictions = result["detections"]
+                # Sometimes the entire result is the predictions
+                elif all(key in result for key in ['x', 'y', 'width', 'height', 'confidence', 'class']):
+                    predictions = [result]
             elif isinstance(result, list):
                 # Sometimes the entire result is a list of predictions
-                predictions = result
+                if len(result) > 0:
+                    if isinstance(result[0], dict):
+                        if all(key in result[0] for key in ['x', 'y', 'width', 'height', 'confidence', 'class']):
+                            predictions = result
+                        elif "predictions" in result[0]:
+                            predictions = result[0]["predictions"]
             
             print(f"Found {len(predictions)} raw predictions")
             

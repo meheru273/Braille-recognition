@@ -1,7 +1,15 @@
 {
+  "version": 2,
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/api/index.py"
+    }
+  ],
   "functions": {
-    "api/braille-detect.py": {
-      "runtime": "python3.9"
+    "api/**": {
+      "maxDuration": 30,
+      "excludeFiles": "{**/__pycache__/**,**/*.pyc,**/*.log,**/*.md,**/tests/**,**/docs/**,**/examples/**,**/*.env,**/firebase*,**/assistant*,**/*.json,**/*.jpg,**/*.png,**/*.jpeg}"
     }
   }
 }

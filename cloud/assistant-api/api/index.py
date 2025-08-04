@@ -1,4 +1,4 @@
-# api/index.py - Merged Braille Detection + Assistant API
+# api/index.py - Simplified Braille Detection API
 import json
 import os
 import base64
@@ -10,17 +10,10 @@ from dataclasses import dataclass
 import sys
 import traceback
 import io
-
-# Try to import inference_sdk, but provide fallback if not available
-try:
-    from inference_sdk import InferenceHTTPClient
-    INFERENCE_SDK_AVAILABLE = True
-except ImportError:
-    INFERENCE_SDK_AVAILABLE = False
-    print("Warning: inference_sdk not available, will use HTTP requests")
+import tempfile
 
 # ============================================================================
-# BRAILLE ASSISTANT CLASSES
+# BRAILLE ASSISTANT CLASSES (UNCHANGED - WORKING FINE)
 # ============================================================================
 
 @dataclass
@@ -249,49 +242,26 @@ class BrailleAssistant:
             return f"I apologize, but I encountered an error. Please try rephrasing your question."
 
 # ============================================================================
-# BRAILLE DETECTOR CLASSES
+# FIXED BRAILLE DETECTOR CLASSES
 # ============================================================================
 
 class BrailleDetector:
-    """Braille Detection using inference_sdk with fallback to HTTP requests"""
+    """FIXED Braille Detection using correct detection API endpoint"""
     
     def __init__(self):
-        # Import configuration
-        try:
-            from config import MODEL_1, ROBOFLOW_API_URL, USE_INFERENCE_SDK
-        except ImportError:
-            # Fallback configuration
-            MODEL_1 = {
-                "workspace": "braille-to-text-0xo2p",
-                "workflow_id": "custom-workflow",
-                "api_key": "RzOXFbriJONcee7MHKN8"
-            }
-            ROBOFLOW_API_URL = "https://serverless.roboflow.com"
-            USE_INFERENCE_SDK = True
+        self.api_key = os.getenv("ROBOFLOW_API_KEY")
+        if not self.api_key:
+            print("Warning: ROBOFLOW_API_KEY not found - detection will be disabled")
+            
+        self.workspace_name = "braille-to-text-0xo2p"
+        self.model_version = "1"
+        # CORRECT endpoint for detection API (not workflows)
+        self.base_url = "https://api.roboflow.com"
         
-        self.workspace_name = MODEL_1["workspace"]
-        self.workflow_id = MODEL_1["workflow_id"]
-        self.api_key = MODEL_1["api_key"]
-        self.base_url = ROBOFLOW_API_URL
-        
-        print(f"🔧 Using model: {self.workspace_name}")
-        print(f"🔑 API key: {self.api_key[:5]}...{self.api_key[-5:] if len(self.api_key) > 10 else '***'}")
-        
-        # Initialize client based on availability
-        if INFERENCE_SDK_AVAILABLE and USE_INFERENCE_SDK:
-            try:
-                self.client = InferenceHTTPClient(
-                    api_url=self.base_url,
-                    api_key=self.api_key
-                )
-                self.use_sdk = True
-                print("✅ Using inference_sdk")
-            except Exception as e:
-                print(f"❌ Failed to initialize inference_sdk: {e}")
-                self.use_sdk = False
-        else:
-            self.use_sdk = False
-            print("⚠️ Using HTTP requests (inference_sdk not available)")
+        print(f"BrailleDetector initialized:")
+        print(f"  Workspace: {self.workspace_name}")
+        print(f"  Model Version: {self.model_version}")
+        print(f"  Detection endpoint: {self.base_url}")
     
     def _encode_image_from_bytes(self, image_bytes: bytes) -> str:
         """Encode image bytes to base64 string"""
@@ -301,377 +271,240 @@ class BrailleDetector:
         except Exception as e:
             raise Exception(f"Failed to encode image: {e}")
     
-
-# ... other parts of your BrailleDetector class ...
-
     def detect_braille_from_bytes(self, image_bytes: bytes) -> Optional[Dict]:
-        """
-        Run Braille detection using image bytes.
-        Uses the working inference_sdk approach with fallback.
-        """
-        print("--- START detect_braille_from_bytes ---")
+        """Run Braille detection using CORRECT detection API endpoint"""
         if not self.api_key:
-            error_msg = "Roboflow API key not configured."
-            print(f"ERROR: {error_msg}")
-            print("--- END detect_braille_from_bytes (FAILURE) ---")
-            return {"error": "Detection configuration error", "detail": error_msg}
-
+            return {"error": "ROBOFLOW_API_KEY not configured"}
+            
         try:
-            print(f"1. Processing image bytes (size: {len(image_bytes)} bytes)...")
+            # Encode image to base64
+            encoded_image = self._encode_image_from_bytes(image_bytes)
             
-            # Use the working detection method
-            result = self.detect_braille_from_bytes_internal(image_bytes)
+            # CORRECT detection API endpoint (discovered by debugging script)
+            url = f"{self.base_url}/{self.workspace_name}/{self.model_version}/predict"
             
-            if result:
-                print("--- END detect_braille_from_bytes (SUCCESS) ---")
-                return result
-            else:
-                print("--- END detect_braille_from_bytes (NO RESULT) ---")
-                return {"error": "No detection result", "detail": "Detection returned no results"}
-
-        except Exception as e:
-            error_msg = f"Unexpected error inside detect_braille_from_bytes: {e}"
-            print(f"ERROR: {error_msg}")
-            traceback.print_exc()
-            print("--- END detect_braille_from_bytes (FAILURE) ---")
-            return {"error": "Detection internal error", "detail": error_msg}
-    
-    def detect_braille_from_bytes_internal(self, image_bytes: bytes) -> Optional[Dict]:
-        """Internal method to handle the actual detection"""
-        try:
-            # Save bytes to temporary file
-            import tempfile
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
-                temp_file.write(image_bytes)
-                temp_path = temp_file.name
+            print(f"Detection API URL: {url}")
             
-            # Use the working detection method
-            if self.use_sdk and self.client:
-                # Use inference_sdk (the working approach)
-                result = self.client.run_workflow(
-                    workspace_name=self.workspace_name,
-                    workflow_id=self.workflow_id,
-                    images={"image": temp_path},
-                    use_cache=True
-                )
-            else:
-                # Fallback to HTTP requests
-                result = self._detect_braille_http(temp_path)
-            
-            # Clean up
-            import os
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
-            
-            return result
-            
-        except Exception as e:
-            print(f"Error in detect_braille_from_bytes_internal: {e}")
-            return None
-    
-    def detect_braille_with_fallback(self, image_path: str) -> Optional[Dict]:
-        """Try all detection methods with fallback"""
-        print(f"Starting Braille detection for: {image_path}")
-        
-        # Verify image exists and is readable
-        if not os.path.exists(image_path):
-            print(f"Image file not found: {image_path}")
-            return None
-        
-        try:
-            # Test image can be opened
-            from PIL import Image
-            with Image.open(image_path) as img:
-                print(f"Image info: {img.size}, {img.mode}")
-        except Exception as e:
-            print(f"Cannot open image: {e}")
-            return None
-        
-        # Try each method
-        methods = [
-            self.detect_braille_method1,
-            self.detect_braille_method2, 
-            self.detect_braille_method3,
-            self.detect_braille_method4
-        ]
-        
-        for i, method in enumerate(methods, 1):
-            print(f"\n--- Trying Detection Method {i} ---")
-            result = method(image_path)
-            if result:
-                print(f"✓ Method {i} successful!")
-                return result
-            else:
-                print(f"✗ Method {i} failed or returned no predictions")
-        
-        print("\n❌ All detection methods failed")
-        return None
-    
-    def detect_braille_method1(self, image_path: str) -> Optional[Dict]:
-        """Method 1: Standard Roboflow API with base64"""
-        try:
-            url = f"https://detect.roboflow.com/{self.workspace_name}/1"
-            
-            # Encode image
-            encoded_image = self._encode_image_from_path(image_path)
-            
-            # Prepare request - use the correct Roboflow API format
+            # Correct payload format for detection API
             payload = {
-                "image": encoded_image,
                 "api_key": self.api_key,
-                "confidence": 0.1,  # Lower confidence threshold
+                "image": encoded_image,
+                "confidence": 0.3,  # Reasonable confidence threshold
                 "overlap": 0.5
             }
             
+            # Headers
             headers = {
                 "Content-Type": "application/json"
             }
             
-            print(f"Trying Method 1: {url}")
-            print(f"API Key length: {len(self.api_key)}")
-            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            print("Sending detection request to Roboflow...")
+            
+            # Make the request
+            response = requests.post(
+                url, 
+                headers=headers, 
+                json=payload, 
+                timeout=30
+            )
             
             print(f"Response status: {response.status_code}")
             
             if response.status_code == 200:
                 result = response.json()
-                print(f"Method 1 success: Response keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+                
+                # Check for API errors in successful response
+                if "error" in result:
+                    print(f"API returned error: {result['error']}")
+                    return {"error": result["error"]}
+                
+                predictions = result.get("predictions", [])
+                print(f"✅ Detection successful! Found {len(predictions)} predictions")
+                
                 return result
             else:
-                print(f"Method 1 failed: {response.status_code} - {response.text[:200]}")
-                return None
+                error_text = response.text
+                print(f"API Error {response.status_code}: {error_text}")
                 
-        except Exception as e:
-            print(f"Method 1 error: {e}")
-            return None
-    
-    def detect_braille_method2(self, image_path: str) -> Optional[Dict]:
-        """Method 2: Multipart form upload"""
-        try:
-            url = f"https://detect.roboflow.com/{self.workspace_name}/1"
-            
-            with open(image_path, 'rb') as image_file:
-                files = {
-                    'file': ('image.jpg', image_file, 'image/jpeg')
-                }
-                
-                data = {
-                    'api_key': self.api_key,
-                    'confidence': '0.1',
-                    'overlap': '0.5'
-                }
-                
-                print(f"Trying Method 2: {url}")
-                response = requests.post(url, files=files, data=data, timeout=30)
-                
-                print(f"Response status: {response.status_code}")
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    print(f"Method 2 success: Response keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
-                    return result
+                # Provide specific error guidance
+                if response.status_code == 401:
+                    return {"error": "Invalid API key or unauthorized access"}
+                elif response.status_code == 404:
+                    return {"error": f"Model not found. Check workspace '{self.workspace_name}' and version '{self.model_version}'"}
                 else:
-                    print(f"Method 2 failed: {response.status_code} - {response.text[:200]}")
-                    return None
-                    
-        except Exception as e:
-            print(f"Method 2 error: {e}")
-            return None
-    
-    def detect_braille_method3(self, image_path: str) -> Optional[Dict]:
-        """Method 3: URL parameter format"""
-        try:
-            url = f"https://detect.roboflow.com/{self.workspace_name}/1?api_key={self.api_key}&confidence=0.1&overlap=0.5"
-            
-            encoded_image = self._encode_image_from_path(image_path)
-            
-            payload = encoded_image
-            
-            headers = {
-                "Content-Type": "application/x-www-form-urlencoded"
-            }
-            
-            print(f"Trying Method 3: {url}")
-            response = requests.post(url, data=payload, headers=headers, timeout=30)
-            
-            print(f"Response status: {response.status_code}")
-            
-            if response.status_code == 200:
-                result = response.json()
-                print(f"Method 3 success: Response keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
-                return result
-            else:
-                print(f"Method 3 failed: {response.status_code} - {response.text[:200]}")
-                return None
+                    return {"error": f"API request failed: {response.status_code} - {error_text}"}
                 
         except Exception as e:
-            print(f"Method 3 error: {e}")
-            return None
+            print(f"Detection error: {e}")
+            return {"error": f"Detection error: {str(e)}"}
     
-    def detect_braille_method4(self, image_path: str) -> Optional[Dict]:
-        """Method 4: Try alternative endpoints"""
-        endpoints = [
-            f"https://api.roboflow.com/{self.workspace_name}/1",
-            f"https://serverless.roboflow.com/{self.workspace_name}/1"
-        ]
+    def try_alternative_versions(self, image_bytes: bytes) -> Optional[Dict]:
+        """Try different model versions if the default fails"""
+        print("Trying alternative model versions...")
         
-        for i, endpoint in enumerate(endpoints, 1):
+        versions_to_try = ["2", "3", "4", "1"]
+        
+        for version in versions_to_try:
             try:
-                url = endpoint
+                print(f"Trying version {version}...")
                 
-                encoded_image = self._encode_image_from_path(image_path)
+                encoded_image = self._encode_image_from_bytes(image_bytes)
+                url = f"{self.base_url}/{self.workspace_name}/{version}/predict"
                 
                 payload = {
-                    "image": encoded_image,
                     "api_key": self.api_key,
-                    "confidence": 0.1,
+                    "image": encoded_image,
+                    "confidence": 0.1,  # Lower confidence for testing
                     "overlap": 0.5
                 }
                 
-                headers = {
-                    "Content-Type": "application/json"
-                }
-                
-                print(f"Trying Method 4.{i}: {url}")
-                response = requests.post(url, json=payload, headers=headers, timeout=30)
-                
-                print(f"Response status: {response.status_code}")
+                response = requests.post(
+                    url, 
+                    headers={"Content-Type": "application/json"}, 
+                    json=payload, 
+                    timeout=25
+                )
                 
                 if response.status_code == 200:
                     result = response.json()
-                    print(f"Method 4.{i} success: Response keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
-                    return result
-                else:
-                    print(f"Method 4.{i} failed: {response.status_code}")
+                    if "error" not in result:
+                        predictions = result.get("predictions", [])
+                        if predictions:
+                            print(f"✅ Version {version} works! Found {len(predictions)} predictions")
+                            self.model_version = version
+                            return result
                     
             except Exception as e:
-                print(f"Method 4.{i} error: {e}")
                 continue
         
         return None
     
-    def _encode_image_from_path(self, image_path: str) -> str:
-        """Encode image from file path to base64 string"""
+    def detect_braille_with_fallback(self, image_bytes: bytes) -> Optional[Dict]:
+        """Try detection with fallback strategies"""
+        print("=== Starting Braille Detection ===")
+        
+        # Primary attempt
+        result = self.detect_braille_from_bytes(image_bytes)
+        
+        if result and "error" not in result:
+            predictions = result.get("predictions", [])
+            if predictions:
+                return result
+        
+        # Try alternative versions
+        print("Primary detection failed, trying alternatives...")
+        result = self.try_alternative_versions(image_bytes)
+        
+        if result and "error" not in result:
+            return result
+        
+        # Try with very low confidence
+        print("Trying with very low confidence...")
         try:
-            with open(image_path, 'rb') as image_file:
-                encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-                return encoded_string
-        except Exception as e:
-            raise Exception(f"Failed to encode image: {e}")
-    
-    def _detect_braille_http(self, image_path: str) -> Optional[Dict]:
-        """Fallback detection using HTTP requests"""
-        try:
-            import requests
-            
-            # Encode image
-            image_data = self._encode_image_from_path(image_path)
-            
-            # Prepare request
-            url = f"{self.base_url}/{self.workspace_name}/workflows/{self.workflow_id}"
+            encoded_image = self._encode_image_from_bytes(image_bytes)
+            url = f"{self.base_url}/{self.workspace_name}/1/predict"
             
             payload = {
-                "image": image_data,
-                "api_key": self.api_key
+                "api_key": self.api_key,
+                "image": encoded_image,
+                "confidence": 0.01,  # Extremely low
+                "overlap": 0.9
             }
             
-            headers = {"Content-Type": "application/json"}
-            
-            print(f"🌐 Making HTTP request to: {url}")
-            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=30)
             
             if response.status_code == 200:
-                return response.json()
-            else:
-                print(f"❌ HTTP request failed: {response.status_code} - {response.text[:200]}")
-                return None
-                
-        except Exception as e:
-            print(f"❌ HTTP detection error: {e}")
-            return None
-
-# ... rest of your BrailleDetector class ...
+                result = response.json()
+                if "error" not in result:
+                    return result
+                    
+        except Exception:
+            pass
         
+        return {"error": "All detection methods failed"}
     
     def extract_predictions(self, result: Dict) -> List[Dict]:
-        """Extract predictions from the result"""
+        """Extract predictions from detection response"""
+        if not result or "error" in result:
+            return []
+            
         try:
-            if not result:
+            predictions = result.get("predictions", [])
+            
+            if not predictions:
                 return []
             
-            # Handle different result structures (matching the working approach)
-            if isinstance(result, list) and len(result) > 0:
-                if "predictions" in result[0]:
-                    predictions_data = result[0]["predictions"]
-                    if "predictions" in predictions_data:
-                        return predictions_data["predictions"]
-                    elif isinstance(predictions_data, list):
-                        return predictions_data
-                elif "predictions" in result[0]:
-                    return result[0]["predictions"]
-            elif isinstance(result, dict):
-                if "predictions" in result:
-                    return result["predictions"]
-                elif "data" in result and "predictions" in result["data"]:
-                    return result["data"]["predictions"]
+            # Validate predictions
+            valid_predictions = []
+            required_keys = ['x', 'y', 'width', 'height', 'confidence', 'class']
             
-            print(f"⚠️ Unexpected result structure: {type(result)}")
-            if isinstance(result, dict):
-                print(f"   Keys: {list(result.keys())}")
-            elif isinstance(result, list) and len(result) > 0:
-                print(f"   First item keys: {list(result[0].keys()) if isinstance(result[0], dict) else 'Not a dict'}")
+            for pred in predictions:
+                if not isinstance(pred, dict):
+                    continue
+                    
+                if not all(key in pred for key in required_keys):
+                    continue
+                
+                try:
+                    cleaned_pred = {
+                        'x': float(pred['x']),
+                        'y': float(pred['y']),
+                        'width': float(pred['width']),
+                        'height': float(pred['height']),
+                        'confidence': max(0.0, min(1.0, float(pred['confidence']))),
+                        'class': str(pred['class']).strip()
+                    }
+                    
+                    if cleaned_pred['width'] > 0 and cleaned_pred['height'] > 0 and cleaned_pred['class']:
+                        valid_predictions.append(cleaned_pred)
+                        
+                except (ValueError, TypeError):
+                    continue
             
-            return []
+            return valid_predictions
             
-        except Exception as e:
-            print(f"Error extracting predictions: {e}")
+        except Exception:
             return []
     
-    def organize_text_by_rows(self, predictions: List[Dict], min_confidence: float = 0.1) -> List[str]:
+    def organize_text_by_rows(self, predictions: List[Dict], min_confidence: float = 0.2) -> List[str]:
         """Organize detected characters into rows"""
-        print(f"--- START organize_text_by_rows ---")
-        print(f"Input predictions count: {len(predictions)}")
-        print(f"Min confidence threshold: {min_confidence}")
-        
         if not predictions:
-            print("No predictions to organize")
-            print("--- END organize_text_by_rows (EMPTY) ---")
             return []
         
         try:
             # Filter by confidence
-            print(f"Confidence levels in predictions:")
-            for i, pred in enumerate(predictions[:5]):  # Show first 5
-                print(f"  Prediction {i}: confidence={pred.get('confidence', 0)}, class={pred.get('class', 'unknown')}")
-            
             filtered_predictions = [
                 pred for pred in predictions 
                 if pred.get('confidence', 0) >= min_confidence
             ]
             
-            print(f"Predictions after confidence filtering: {len(filtered_predictions)}")
+            if not filtered_predictions:
+                # Try with lower confidence
+                filtered_predictions = [
+                    pred for pred in predictions 
+                    if pred.get('confidence', 0) >= 0.05
+                ]
             
             if not filtered_predictions:
-                print("No predictions meet confidence threshold")
-                print("--- END organize_text_by_rows (NO CONFIDENT PREDICTIONS) ---")
-                return []
+                filtered_predictions = predictions
             
             # Sort by Y coordinate
             sorted_by_y = sorted(filtered_predictions, key=lambda p: p.get('y', 0))
             
+            if not sorted_by_y:
+                return []
+            
             rows = []
             current_group = [sorted_by_y[0]]
             
-            # Group predictions into rows
+            # Group into rows
             for i in range(1, len(sorted_by_y)):
                 current_pred = sorted_by_y[i]
                 prev_pred = sorted_by_y[i-1]
                 
-                # Calculate dynamic threshold for row grouping
-                avg_height = (current_pred.get('height', 30) + prev_pred.get('height', 30)) / 2
-                threshold = max(15, avg_height * 0.5)
+                # Calculate threshold for row grouping
+                avg_height = (current_pred.get('height', 20) + prev_pred.get('height', 20)) / 2
+                threshold = max(8, avg_height * 0.7)
                 
                 y_diff = abs(current_pred.get('y', 0) - prev_pred.get('y', 0))
                 
@@ -693,17 +526,13 @@ class BrailleDetector:
                 if row_text.strip():
                     rows.append(row_text)
             
-            print(f"Organized into {len(rows)} text rows")
-            print("--- END organize_text_by_rows (SUCCESS) ---")
             return rows
             
-        except Exception as e:
-            print(f"Error in organize_text_by_rows: {e}")
-            print("--- END organize_text_by_rows (ERROR) ---")
+        except Exception:
             return []
 
 # ============================================================================
-# MERGED API HANDLER
+# SIMPLIFIED API HANDLER
 # ============================================================================
 
 class handler(BaseHTTPRequestHandler):
@@ -723,50 +552,9 @@ class handler(BaseHTTPRequestHandler):
             elif path == '/health':
                 self.send_json_response({
                     'status': 'healthy',
-                    'features': ['braille_detection', 'ai_assistant', 'chat'],
                     'roboflow_configured': bool(self.detector.api_key),
-                    'ai_configured': bool(self.assistant.llm.api_key),
-                    'roboflow_key_length': len(self.detector.api_key) if self.detector.api_key else 0,
-                    'inference_sdk_available': False,
-                    'inference_client_ready': False
+                    'detection_endpoint': f"{self.detector.base_url}/{self.detector.workspace_name}/{self.detector.model_version}/predict"
                 })
-            elif path == '/test-api':
-                if not self.detector.api_key:
-                    self.send_json_response({
-                        'error': 'API key not configured',
-                        'message': 'Please set ROBOFLOW_API_KEY environment variable'
-                    }, 400)
-                else:
-                    # Test the API key with a simple request
-                    try:
-                        test_url = f"{self.detector.base_url}/{self.detector.workspace_name}/workflows/{self.detector.workflow_id}"
-                        test_response = requests.get(
-                            test_url,
-                            params={"api_key": self.detector.api_key},
-                            timeout=10
-                        )
-                        
-                        self.send_json_response({
-                            'status': 'API key configured',
-                            'key_length': len(self.detector.api_key),
-                            'workspace': self.detector.workspace_name,
-                            'workflow': self.detector.workflow_id,
-                            'inference_sdk_available': False,
-                            'inference_client_ready': False,
-                            'api_url': self.detector.base_url,
-                            'test_status': test_response.status_code,
-                            'test_message': 'API key test completed',
-                            'key_warning': 'API key appears incomplete' if len(self.detector.api_key) < 30 else None
-                        })
-                    except Exception as e:
-                        self.send_json_response({
-                            'status': 'API key configured but test failed',
-                            'key_length': len(self.detector.api_key),
-                            'workspace': self.detector.workspace_name,
-                            'workflow': self.detector.workflow_id,
-                            'test_error': str(e),
-                            'key_warning': 'API key appears incomplete' if len(self.detector.api_key) < 30 else None
-                        })
             elif path.startswith('/favicon'):
                 self.send_response(404)
                 self.end_headers()
@@ -795,13 +583,7 @@ class handler(BaseHTTPRequestHandler):
                 return
             
             # Route to appropriate handler
-            if path == '/api/chat':
-                self.handle_chat(data)
-            elif path == '/api/process-braille':
-                self.handle_braille_processing(data)
-            elif path == '/api/detect-braille':
-                self.handle_braille_detection(data)
-            elif path == '/api/detect-and-process':
+            if path == '/api/detect-and-process':
                 self.handle_detect_and_process(data)
             else:
                 self.send_response(404)
@@ -811,78 +593,6 @@ class handler(BaseHTTPRequestHandler):
                 
         except Exception as e:
             self.send_error_response(f"POST error: {str(e)}")
-    
-    def handle_chat(self, data):
-        """Handle chat requests"""
-        try:
-            message = data.get('message', '').strip()
-            if not message:
-                self.send_error_response('Message is required', 400)
-                return
-            
-            response = self.assistant.chat(message)
-            self.send_json_response({'response': response})
-            
-        except Exception as e:
-            self.send_error_response(f'Chat processing error: {str(e)}')
-    
-    def handle_braille_processing(self, data):
-        """Handle braille text processing"""
-        try:
-            braille_strings = data.get('braille_strings', [])
-            if not braille_strings:
-                self.send_error_response('Braille strings are required', 400)
-                return
-            
-            result = self.assistant.process_braille_strings(braille_strings)
-            
-            self.send_json_response({
-                'text': result.text,
-                'explanation': result.explanation,
-                'confidence': result.confidence
-            })
-            
-        except Exception as e:
-            self.send_error_response(f'Braille processing error: {str(e)}')
-    
-    def handle_braille_detection(self, data):
-        """Handle braille detection from image"""
-        try:
-            image_data = data.get('image')
-            if not image_data:
-                self.send_error_response('Image data is required', 400)
-                return
-            
-            # Decode base64 image
-            try:
-                if image_data.startswith('data:image'):
-                    # Remove data URL prefix
-                    image_data = image_data.split(',')[1]
-                
-                image_bytes = base64.b64decode(image_data)
-            except Exception as e:
-                self.send_error_response(f'Invalid image data: {str(e)}', 400)
-                return
-            
-            # Run detection
-            detection_result = self.detector.detect_braille_from_bytes(image_bytes)
-            
-            if "error" in detection_result:
-                self.send_error_response(detection_result["error"])
-                return
-            
-            # Extract predictions
-            predictions = self.detector.extract_predictions(detection_result)
-            text_rows = self.detector.organize_text_by_rows(predictions)
-            
-            self.send_json_response({
-                'predictions': predictions,
-                'text_rows': text_rows,
-                'detection_count': len(predictions)
-            })
-            
-        except Exception as e:
-            self.send_error_response(f'Braille detection error: {str(e)}')
     
     def handle_detect_and_process(self, data):
         """Handle end-to-end braille detection and processing"""
@@ -902,11 +612,23 @@ class handler(BaseHTTPRequestHandler):
                 self.send_error_response(f'Invalid image data: {str(e)}', 400)
                 return
             
-            # Run detection
-            detection_result = self.detector.detect_braille_from_bytes(image_bytes)
+            # Run detection with improved method
+            detection_result = self.detector.detect_braille_with_fallback(image_bytes)
             
             if "error" in detection_result:
-                self.send_error_response(detection_result["error"])
+                self.send_json_response({
+                    'detection': {
+                        'predictions': [],
+                        'text_rows': [],
+                        'detection_count': 0,
+                        'error': detection_result["error"]
+                    },
+                    'processing': {
+                        'text': '',
+                        'explanation': f'Detection failed: {detection_result["error"]}',
+                        'confidence': 0.0
+                    }
+                })
                 return
             
             # Extract and organize text
@@ -932,13 +654,13 @@ class handler(BaseHTTPRequestHandler):
             else:
                 self.send_json_response({
                     'detection': {
-                        'predictions': [],
+                        'predictions': predictions,
                         'text_rows': [],
-                        'detection_count': 0
+                        'detection_count': len(predictions)
                     },
                     'processing': {
                         'text': '',
-                        'explanation': 'No braille characters detected in the image.',
+                        'explanation': 'No braille text could be organized from the detected characters.' if predictions else 'No braille characters detected in the image.',
                         'confidence': 0.0
                     }
                 })
@@ -947,147 +669,151 @@ class handler(BaseHTTPRequestHandler):
             self.send_error_response(f'Detection and processing error: {str(e)}')
     
     def serve_html(self):
-        """Serve the enhanced web interface"""
+        """Serve the simplified web interface"""
         html_content = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Complete Braille Recognition System</title>
+    <title>Braille Recognition</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh; padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
         }
         .container { 
-            max-width: 1000px; margin: 0 auto; background: white; 
-            border-radius: 15px; padding: 30px; 
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            max-width: 600px; 
+            margin: 0 auto; 
+            background: white; 
+            border-radius: 10px; 
+            padding: 30px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }
-        .header { text-align: center; margin-bottom: 30px; color: #333; }
-        .header h1 { 
-            font-size: 2.5em; margin-bottom: 10px; 
-            background: linear-gradient(45deg, #667eea, #764ba2);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        h1 { 
+            text-align: center; 
+            color: #333; 
+            margin-bottom: 30px;
         }
-        .input-group { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 8px; font-weight: 600; color: #555; }
-        input, textarea, select { 
-            width: 100%; padding: 12px; border: 2px solid #e0e0e0; 
-            border-radius: 8px; font-size: 16px; transition: border-color 0.3s;
+        .upload-area {
+            border: 2px dashed #4CAF50; 
+            border-radius: 8px; 
+            padding: 40px;
+            text-align: center; 
+            cursor: pointer; 
+            margin-bottom: 20px;
+            transition: background-color 0.3s;
         }
-        input:focus, textarea:focus, select:focus { 
-            outline: none; border-color: #667eea; 
+        .upload-area:hover { 
+            background: #f0f8f0; 
+        }
+        .upload-area.dragover { 
+            background: #e8f5e8; 
+            border-color: #45a049; 
+        }
+        .image-preview { 
+            max-width: 100%; 
+            max-height: 300px; 
+            margin: 20px auto; 
+            display: block; 
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
         .btn { 
-            background: linear-gradient(45deg, #667eea, #764ba2); 
-            color: white; padding: 12px 24px; border: none; 
-            border-radius: 8px; cursor: pointer; font-size: 16px; 
-            font-weight: 600; transition: transform 0.2s; margin: 5px;
+            background: #4CAF50; 
+            color: white; 
+            padding: 12px 24px; 
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-size: 16px; 
+            width: 100%;
+            margin-top: 10px;
         }
-        .btn:hover { transform: translateY(-2px); }
-        .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+        .btn:hover { 
+            background: #45a049; 
+        }
+        .btn:disabled { 
+            background: #cccccc; 
+            cursor: not-allowed; 
+        }
         .result { 
-            margin-top: 20px; padding: 20px; background: #f8f9fa; 
-            border-radius: 8px; border-left: 4px solid #667eea;
+            margin-top: 20px; 
+            padding: 20px; 
+            background: #f8f9fa; 
+            border-radius: 8px; 
+            border-left: 4px solid #4CAF50;
         }
-        .chat-container { 
-            max-height: 400px; overflow-y: auto; border: 2px solid #e0e0e0; 
-            border-radius: 8px; padding: 15px; margin-bottom: 15px; background: #fafafa;
+        .loading { 
+            display: none; 
+            text-align: center; 
+            color: #4CAF50; 
+            font-weight: bold; 
+            margin: 20px 0;
         }
-        .message { margin-bottom: 15px; padding: 10px; border-radius: 8px; }
-        .user-message { background: #667eea; color: white; margin-left: 20px; }
-        .assistant-message { background: white; border: 1px solid #e0e0e0; margin-right: 20px; }
-        .loading { display: none; text-align: center; color: #667eea; font-weight: 600; }
-        .tabs { display: flex; margin-bottom: 20px; border-bottom: 2px solid #e0e0e0; }
-        .tab { 
-            padding: 12px 24px; cursor: pointer; border: none; 
-            background: none; font-size: 16px; color: #666; transition: all 0.3s;
+        .status { 
+            background: #e8f5e8; 
+            border: 1px solid #4CAF50; 
+            border-radius: 6px;
+            padding: 10px; 
+            margin-bottom: 20px; 
+            text-align: center;
+            font-size: 14px;
         }
-        .tab.active { color: #667eea; border-bottom: 2px solid #667eea; }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        .upload-area {
-            border: 2px dashed #667eea; border-radius: 8px; padding: 40px;
-            text-align: center; cursor: pointer; transition: all 0.3s;
+        .status.error {
+            background: #ffe8e8; 
+            border-color: #f44336;
+            color: #d32f2f;
         }
-        .upload-area:hover { background: #f0f7ff; }
-        .upload-area.dragover { background: #e6f3ff; border-color: #4a90e2; }
-        .image-preview { max-width: 300px; max-height: 200px; margin: 10px auto; display: block; }
+        .detected-text {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .detected-text h4 {
+            margin-bottom: 10px;
+            color: #856404;
+        }
+        .text-row {
+            background: white;
+            padding: 8px;
+            margin: 5px 0;
+            border-radius: 4px;
+            font-family: monospace;
+            border-left: 3px solid #ffc107;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h1>🔤 Complete Braille Recognition System</h1>
-            <p>AI-powered braille detection, processing, and intelligent assistance</p>
+        <h1>🔤 Braille Recognition</h1>
+        
+        <div id="status" class="status" style="display: none;">
+            <span id="status-text">Checking system...</span>
         </div>
 
-        <div class="tabs">
-            <button class="tab active" onclick="switchTab('detection')">Braille Detection</button>
-            <button class="tab" onclick="switchTab('processing')">Text Processing</button>
-            <button class="tab" onclick="switchTab('chat')">AI Chat</button>
+        <div class="upload-area" onclick="document.getElementById('imageInput').click()" 
+             ondrop="handleDrop(event)" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)">
+            <p>📸 Click to upload or drag & drop braille image</p>
+            <input type="file" id="imageInput" accept="image/*" style="display: none;" onchange="handleImageUpload(event)">
         </div>
-
-        <div id="detection-tab" class="tab-content active">
-            <div class="upload-area" onclick="document.getElementById('imageInput').click()" 
-                 ondrop="handleDrop(event)" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)">
-                <p>📸 Click to upload or drag & drop braille image</p>
-                <input type="file" id="imageInput" accept="image/*" style="display: none;" onchange="handleImageUpload(event)">
-            </div>
-            <img id="imagePreview" class="image-preview" style="display: none;">
-            <button class="btn" onclick="detectBraille()" id="detectBtn" disabled>🔍 Detect Braille</button>
-            <button class="btn" onclick="detectAndProcess()" id="processBtn" disabled>🚀 Detect & Process</button>
-            <div class="loading" id="detection-loading">Processing image...</div>
-            <div id="detection-result" class="result" style="display: none;">
-                <h3>Detection Results:</h3>
-                <div id="detection-output"></div>
-            </div>
-        </div>
-
-        <div id="processing-tab" class="tab-content">
-            <div class="input-group">
-                <label for="braille-input">Detected Braille Text (comma-separated):</label>
-                <textarea id="braille-input" rows="4" placeholder="Enter detected braille characters, e.g: hello, world"></textarea>
-            </div>
-            <button class="btn" onclick="processBraille()">🔍 Process Braille</button>
-            <div class="loading" id="braille-loading">Processing braille text...</div>
-            <div id="braille-result" class="result" style="display: none;">
-                <h3>Processing Results:</h3>
-                <div id="braille-output"></div>
-            </div>
-        </div>
-
-        <div id="chat-tab" class="tab-content">
-            <div id="chat-messages" class="chat-container">
-                <div class="message assistant-message">
-                    <strong>Assistant:</strong> Hello! I'm your AI assistant. I can help with braille processing and answer questions.
-                </div>
-            </div>
-            <div class="input-group">
-                <input type="text" id="chat-input" placeholder="Type your message..." onkeypress="handleChatKeyPress(event)">
-            </div>
-            <button class="btn" onclick="sendMessage()">💬 Send Message</button>
-            <button class="btn" onclick="clearChat()" style="background: #dc3545;">🗑️ Clear Chat</button>
-            <div class="loading" id="chat-loading">Thinking...</div>
+        
+        <img id="imagePreview" class="image-preview" style="display: none;">
+        
+        <button class="btn" onclick="processImage()" id="processBtn" disabled>🔍 Detect Braille</button>
+        
+        <div class="loading" id="loading">Processing image...</div>
+        
+        <div id="result" class="result" style="display: none;">
+            <div id="output"></div>
         </div>
     </div>
 
     <script>
         let currentImage = null;
-
-        function switchTab(tabName) {
-            document.querySelectorAll('.tab-content').forEach(tab => {
-                tab.classList.remove('active');
-            });
-            document.querySelectorAll('.tab').forEach(tab => {
-                tab.classList.remove('active');
-            });
-            document.getElementById(tabName + '-tab').classList.add('active');
-            event.target.classList.add('active');
-        }
 
         function handleDragOver(event) {
             event.preventDefault();
@@ -1127,71 +853,20 @@ class handler(BaseHTTPRequestHandler):
                 preview.src = currentImage;
                 preview.style.display = 'block';
                 
-                document.getElementById('detectBtn').disabled = false;
                 document.getElementById('processBtn').disabled = false;
             };
             reader.readAsDataURL(file);
         }
 
-        async function detectBraille() {
+        async function processImage() {
             if (!currentImage) {
                 alert('Please upload an image first.');
                 return;
             }
 
-            const resultDiv = document.getElementById('detection-result');
-            const outputDiv = document.getElementById('detection-output');
-            const loading = document.getElementById('detection-loading');
-
-            loading.style.display = 'block';
-            resultDiv.style.display = 'none';
-
-            try {
-                const response = await fetch('/api/detect-braille', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ image: currentImage })
-                });
-
-                const data = await response.json();
-
-                if (response.ok) {
-                    outputDiv.innerHTML = `
-                        <div style="margin-bottom: 15px;">
-                            <strong>Detections Found:</strong> ${data.detection_count}
-                        </div>
-                        <div style="margin-bottom: 15px;">
-                            <strong>Text Rows:</strong>
-                            <ul style="margin-left: 20px;">
-                                ${data.text_rows.map(row => `<li>${row}</li>`).join('')}
-                            </ul>
-                        </div>
-                        <div>
-                            <strong>Raw Predictions:</strong> ${data.predictions.length} characters detected
-                        </div>
-                    `;
-                    resultDiv.style.display = 'block';
-                } else {
-                    outputDiv.innerHTML = `<div style="color: red;">Error: ${data.error}</div>`;
-                    resultDiv.style.display = 'block';
-                }
-            } catch (error) {
-                outputDiv.innerHTML = `<div style="color: red;">Network error: ${error.message}</div>`;
-                resultDiv.style.display = 'block';
-            }
-
-            loading.style.display = 'none';
-        }
-
-        async function detectAndProcess() {
-            if (!currentImage) {
-                alert('Please upload an image first.');
-                return;
-            }
-
-            const resultDiv = document.getElementById('detection-result');
-            const outputDiv = document.getElementById('detection-output');
-            const loading = document.getElementById('detection-loading');
+            const resultDiv = document.getElementById('result');
+            const outputDiv = document.getElementById('output');
+            const loading = document.getElementById('loading');
 
             loading.style.display = 'block';
             resultDiv.style.display = 'none';
@@ -1206,141 +881,46 @@ class handler(BaseHTTPRequestHandler):
                 const data = await response.json();
 
                 if (response.ok) {
-                    outputDiv.innerHTML = `
-                        <div style="margin-bottom: 20px; padding: 15px; background: #e3f2fd; border-radius: 5px;">
-                            <h4>🎯 Detection Results</h4>
-                            <p><strong>Characters Found:</strong> ${data.detection.detection_count}</p>
-                            <p><strong>Text Rows:</strong> ${data.detection.text_rows.join(', ')}</p>
-                        </div>
-                        <div style="padding: 15px; background: #f3e5f5; border-radius: 5px;">
-                            <h4>🤖 AI Processing Results</h4>
-                            <p><strong>Processed Text:</strong> ${data.processing.text}</p>
+                    let outputHTML = '';
+                    
+                    // Show detected text rows
+                    if (data.detection.text_rows && data.detection.text_rows.length > 0) {
+                        outputHTML += `
+                            <div class="detected-text">
+                                <h4>📝 Detected Braille Text:</h4>
+                                ${data.detection.text_rows.map(row => 
+                                    `<div class="text-row">${row}</div>`
+                                ).join('')}
+                            </div>
+                        `;
+                    }
+                    
+                    // Show processing results
+                    outputHTML += `
+                        <div style="margin-top: 20px;">
+                            <h4>🤖 AI Processing:</h4>
+                            <p><strong>Processed Text:</strong> ${data.processing.text || 'No text processed'}</p>
                             <p><strong>Explanation:</strong> ${data.processing.explanation}</p>
                             <p><strong>Confidence:</strong> ${(data.processing.confidence * 100).toFixed(1)}%</p>
                         </div>
+                        <div style="margin-top: 15px; font-size: 14px; color: #666;">
+                            <strong>Detection Info:</strong> ${data.detection.detection_count} characters detected
+                            ${data.detection.error ? `<br><span style="color: red;">Error: ${data.detection.error}</span>` : ''}
+                        </div>
                     `;
+                    
+                    outputDiv.innerHTML = outputHTML;
                     resultDiv.style.display = 'block';
                 } else {
-                    outputDiv.innerHTML = `<div style="color: red;">Error: ${data.error}</div>`;
+                    outputDiv.innerHTML = `<div style="color: red;">❌ Error: ${data.error}</div>`;
                     resultDiv.style.display = 'block';
                 }
             } catch (error) {
-                outputDiv.innerHTML = `<div style="color: red;">Network error: ${error.message}</div>`;
+                outputDiv.innerHTML = `<div style="color: red;">❌ Network error: ${error.message}</div>`;
                 resultDiv.style.display = 'block';
             }
 
             loading.style.display = 'none';
-        }
-
-        async function processBraille() {
-            const input = document.getElementById('braille-input').value.trim();
-            const resultDiv = document.getElementById('braille-result');
-            const outputDiv = document.getElementById('braille-output');
-            const loading = document.getElementById('braille-loading');
-
-            if (!input) {
-                alert('Please enter some braille text to process.');
-                return;
-            }
-
-            loading.style.display = 'block';
-            resultDiv.style.display = 'none';
-
-            try {
-                const response = await fetch('/api/process-braille', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        braille_strings: input.split(',').map(s => s.trim())
-                    })
-                });
-
-                const data = await response.json();
-
-                if (response.ok) {
-                    outputDiv.innerHTML = `
-                        <div style="margin-bottom: 15px;">
-                            <strong>Processed Text:</strong> ${data.text}
-                        </div>
-                        <div style="margin-bottom: 15px;">
-                            <strong>Explanation:</strong> ${data.explanation}
-                        </div>
-                        <div>
-                            <strong>Confidence:</strong> ${(data.confidence * 100).toFixed(1)}%
-                        </div>
-                    `;
-                    resultDiv.style.display = 'block';
-                } else {
-                    outputDiv.innerHTML = `<div style="color: red;">Error: ${data.error}</div>`;
-                    resultDiv.style.display = 'block';
-                }
-            } catch (error) {
-                outputDiv.innerHTML = `<div style="color: red;">Network error: ${error.message}</div>`;
-                resultDiv.style.display = 'block';
-            }
-
-            loading.style.display = 'none';
-        }
-
-        async function sendMessage() {
-            const input = document.getElementById('chat-input');
-            const message = input.value.trim();
-            const messagesDiv = document.getElementById('chat-messages');
-            const loading = document.getElementById('chat-loading');
-
-            if (!message) return;
-
-            const userMessageDiv = document.createElement('div');
-            userMessageDiv.className = 'message user-message';
-            userMessageDiv.innerHTML = `<strong>You:</strong> ${message}`;
-            messagesDiv.appendChild(userMessageDiv);
-
-            input.value = '';
-            loading.style.display = 'block';
-
-            try {
-                const response = await fetch('/api/chat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: message })
-                });
-
-                const data = await response.json();
-
-                const assistantMessageDiv = document.createElement('div');
-                assistantMessageDiv.className = 'message assistant-message';
-                
-                if (response.ok) {
-                    assistantMessageDiv.innerHTML = `<strong>Assistant:</strong> ${data.response}`;
-                } else {
-                    assistantMessageDiv.innerHTML = `<strong>Assistant:</strong> <span style="color: red;">Error: ${data.error}</span>`;
-                }
-                
-                messagesDiv.appendChild(assistantMessageDiv);
-            } catch (error) {
-                const errorMessageDiv = document.createElement('div');
-                errorMessageDiv.className = 'message assistant-message';
-                errorMessageDiv.innerHTML = `<strong>Assistant:</strong> <span style="color: red;">Network error: ${error.message}</span>`;
-                messagesDiv.appendChild(errorMessageDiv);
-            }
-
-            loading.style.display = 'none';
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
-        }
-
-        function handleChatKeyPress(event) {
-            if (event.key === 'Enter') {
-                sendMessage();
-            }
-        }
-
-        function clearChat() {
-            const messagesDiv = document.getElementById('chat-messages');
-            messagesDiv.innerHTML = `
-                <div class="message assistant-message">
-                    <strong>Assistant:</strong> Hello! I'm your AI assistant. I can help with braille processing and answer questions.
-                </div>
-            `;
         }
 
         // Check system status on load
@@ -1349,42 +929,22 @@ class handler(BaseHTTPRequestHandler):
                 const response = await fetch('/health');
                 const status = await response.json();
                 
-                if (!status.roboflow_configured) {
-                    document.getElementById('detectBtn').title = "Roboflow API key not configured";
-                    document.getElementById('processBtn').title = "Roboflow API key not configured";
-                    document.getElementById('detectBtn').disabled = true;
-                    document.getElementById('processBtn').disabled = true;
-                    
-                    // Show warning message
-                    const warningDiv = document.createElement('div');
-                    warningDiv.style.cssText = 'background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 15px; border-radius: 5px; margin-bottom: 20px;';
-                    warningDiv.innerHTML = `
-                        <strong>⚠️ Configuration Required:</strong><br>
-                        Roboflow API key not configured. Please set the ROBOFLOW_API_KEY environment variable.<br>
-                        <a href="https://roboflow.com/account" target="_blank">Get your API key here</a>
-                    `;
-                    document.querySelector('.container').insertBefore(warningDiv, document.querySelector('.tabs'));
+                const statusDiv = document.getElementById('status');
+                const statusText = document.getElementById('status-text');
+                
+                if (status.roboflow_configured) {
+                    statusText.textContent = '✅ System Ready - Braille detection enabled';
+                    statusDiv.classList.remove('error');
                 } else {
-                                         // Show SDK status (removed for Vercel memory limit)
-                     const sdkStatus = '⚠️ Using HTTP requests (SDK removed for memory optimization)';
-                    
-                                         const statusDiv = document.createElement('div');
-                     const keyWarning = status.roboflow_key_length < 30 ? 
-                         '<br>⚠️ <strong>Warning:</strong> API key appears incomplete (should be 32+ characters)' : '';
-                     
-                     statusDiv.style.cssText = 'background: #d4edda; border: 1px solid #c3e6cb; color: #155724; padding: 10px; border-radius: 5px; margin-bottom: 20px; font-size: 14px;';
-                     statusDiv.innerHTML = `
-                         <strong>🔧 System Status:</strong><br>
-                         • Roboflow API: ✓ Configured (Key length: ${status.roboflow_key_length})${keyWarning}<br>
-                         • Inference SDK: ${sdkStatus}<br>
-                         • AI Assistant: ${status.ai_configured ? '✓ Configured' : '⚠️ Using fallback mode'}
-                     `;
-                    document.querySelector('.container').insertBefore(statusDiv, document.querySelector('.tabs'));
+                    statusText.textContent = '❌ Roboflow API key not configured - Detection disabled';
+                    statusDiv.classList.add('error');
+                    document.getElementById('processBtn').disabled = true;
                 }
                 
-                console.log('System status:', status);
+                statusDiv.style.display = 'block';
+                
             } catch (error) {
-                console.log('Could not check system status');
+                console.log('Could not check system status:', error);
             }
         };
     </script>

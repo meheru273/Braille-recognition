@@ -11,8 +11,13 @@ import sys
 import traceback
 import io
 
-# inference_sdk removed to stay within Vercel's 250MB memory limit
-INFERENCE_SDK_AVAILABLE = False
+# Try to import inference_sdk, but provide fallback if not available
+try:
+    from inference_sdk import InferenceHTTPClient
+    INFERENCE_SDK_AVAILABLE = True
+except ImportError:
+    INFERENCE_SDK_AVAILABLE = False
+    print("Warning: inference_sdk not available, will use HTTP requests")
 
 # ============================================================================
 # BRAILLE ASSISTANT CLASSES
@@ -248,35 +253,45 @@ class BrailleAssistant:
 # ============================================================================
 
 class BrailleDetector:
-    """Lightweight Braille Detection using direct HTTP requests"""
+    """Braille Detection using inference_sdk with fallback to HTTP requests"""
     
     def __init__(self):
-        # Try to get API key from environment, with fallback
-        env_key = os.getenv("ROBOFLOW_API_KEY")
-        if env_key:
-            self.api_key = env_key
-        else:
-            # Use the provided API key as fallback
-            self.api_key = "RzOXFbriJONcee7MHKN8"
-            print("Using fallback API key - consider setting ROBOFLOW_API_KEY environment variable")
-            print("Note: This API key appears to be incomplete. A full Roboflow API key is typically 32+ characters.")
+        # Import configuration
+        try:
+            from config import MODEL_1, ROBOFLOW_API_URL, USE_INFERENCE_SDK
+        except ImportError:
+            # Fallback configuration
+            MODEL_1 = {
+                "workspace": "braille-to-text-0xo2p",
+                "workflow_id": "custom-workflow",
+                "api_key": "RzOXFbriJONcee7MHKN8"
+            }
+            ROBOFLOW_API_URL = "https://serverless.roboflow.com"
+            USE_INFERENCE_SDK = True
         
-        if not self.api_key:
-            print("ERROR: No Roboflow API key available - detection will be disabled")
-            print("To fix this:")
-            print("1. Go to https://roboflow.com/account")
-            print("2. Copy your API key")
-            print("3. Set the ROBOFLOW_API_KEY environment variable")
-            print("4. Restart the application")
-        else:
-            print(f"Using Roboflow API key: {self.api_key[:5]}...{self.api_key[-5:]}")
-            
-        self.workspace_name = "braille-to-text-0xo2p"
-        self.workflow_id = "custom-workflow"
-        self.base_url = "https://serverless.roboflow.com"
+        self.workspace_name = MODEL_1["workspace"]
+        self.workflow_id = MODEL_1["workflow_id"]
+        self.api_key = MODEL_1["api_key"]
+        self.base_url = ROBOFLOW_API_URL
         
-        # inference_sdk removed to stay within Vercel's 250MB memory limit
-        self.client = None
+        print(f"🔧 Using model: {self.workspace_name}")
+        print(f"🔑 API key: {self.api_key[:5]}...{self.api_key[-5:] if len(self.api_key) > 10 else '***'}")
+        
+        # Initialize client based on availability
+        if INFERENCE_SDK_AVAILABLE and USE_INFERENCE_SDK:
+            try:
+                self.client = InferenceHTTPClient(
+                    api_url=self.base_url,
+                    api_key=self.api_key
+                )
+                self.use_sdk = True
+                print("✅ Using inference_sdk")
+            except Exception as e:
+                print(f"❌ Failed to initialize inference_sdk: {e}")
+                self.use_sdk = False
+        else:
+            self.use_sdk = False
+            print("⚠️ Using HTTP requests (inference_sdk not available)")
     
     def _encode_image_from_bytes(self, image_bytes: bytes) -> str:
         """Encode image bytes to base64 string"""
@@ -292,11 +307,11 @@ class BrailleDetector:
     def detect_braille_from_bytes(self, image_bytes: bytes) -> Optional[Dict]:
         """
         Run Braille detection using image bytes.
-        Uses direct HTTP requests (inference_sdk removed for Vercel memory limit).
+        Uses the working inference_sdk approach with fallback.
         """
         print("--- START detect_braille_from_bytes ---")
         if not self.api_key:
-            error_msg = "Roboflow API key not configured. Please set ROBOFLOW_API_KEY environment variable."
+            error_msg = "Roboflow API key not configured."
             print(f"ERROR: {error_msg}")
             print("--- END detect_braille_from_bytes (FAILURE) ---")
             return {"error": "Detection configuration error", "detail": error_msg}
@@ -304,94 +319,15 @@ class BrailleDetector:
         try:
             print(f"1. Processing image bytes (size: {len(image_bytes)} bytes)...")
             
-            # Use direct HTTP requests (inference_sdk removed for Vercel memory limit)
-            print("2. Using direct HTTP requests...")
-            encoded_image = self._encode_image_from_bytes(image_bytes)
-            print(f"   -> Encoded image length: {len(encoded_image)} characters")
-
-            # Prepare request details - try both endpoint formats
-            url_option_1 = f"{self.base_url}/{self.workspace_name}/workflows/{self.workflow_id}"
-            url_option_2 = f"https://detect.roboflow.com/{self.workspace_name}/{self.workflow_id}"
+            # Use the working detection method
+            result = self.detect_braille_from_bytes_internal(image_bytes)
             
-            headers = {"Content-Type": "application/json"}
-            payload = {"image": encoded_image}
-            params = {"api_key": self.api_key}
-
-            print(f"3. Trying first endpoint: {url_option_1}")
-            masked_key = self.api_key[:5] + '*' * (len(self.api_key) - 10) + self.api_key[-5:] if len(self.api_key) > 10 else '*' * len(self.api_key)
-            print(f"   -> API Key: {masked_key}")
-
-            # Try first endpoint
-            response = requests.post(
-                url_option_1,
-                headers=headers,
-                json=payload,
-                params=params,
-                timeout=30
-            )
-            
-            # If first endpoint fails, try alternative
-            if response.status_code != 200:
-                print(f"   -> First endpoint failed (status {response.status_code}), trying alternative...")
-                print(f"   -> Trying alternative endpoint: {url_option_2}")
-                
-                # For the alternative endpoint, use different payload structure
-                alt_payload = {
-                    "inputs": {
-                        "image": {
-                            "type": "base64",
-                            "value": encoded_image
-                        }
-                    }
-                }
-                
-                response = requests.post(
-                    url_option_2,
-                    headers=headers,
-                    json=alt_payload,
-                    params=params,
-                    timeout=30
-                )
-            
-            print(f"4. Received Response:")
-            print(f"   -> Status Code: {response.status_code}")
-
-            if response.status_code == 200:
-                result_data = response.json()
-                print(f"   -> Successfully parsed response")
-                print(f"   -> Response type: {type(result_data)}")
-                if isinstance(result_data, dict):
-                    print(f"   -> Response keys: {list(result_data.keys())}")
-                    # Check for specific keys that indicate success
-                    if "predictions" in result_data:
-                        pred_count = len(result_data["predictions"]) if isinstance(result_data["predictions"], list) else 0
-                        print(f"   -> Found {pred_count} predictions in response")
-                    elif "outputs" in result_data:
-                        print(f"   -> Found 'outputs' key in response")
-                elif isinstance(result_data, list):
-                    print(f"   -> Response list length: {len(result_data)}")
-                    if len(result_data) > 0 and isinstance(result_data[0], dict):
-                        print(f"   -> First item keys: {list(result_data[0].keys())}")
+            if result:
                 print("--- END detect_braille_from_bytes (SUCCESS) ---")
-                return result_data
+                return result
             else:
-                error_detail = response.text
-                print(f"   -> Error response: {error_detail[:500]}...")
-                
-                try:
-                    error_json = response.json()
-                    error_detail = error_json.get('message', error_json.get('error', error_detail))
-                except:
-                    pass
-
-                final_error_msg = f"Roboflow API returned status {response.status_code}. Details: {error_detail}"
-                print(f"ERROR: {final_error_msg}")
-                print("--- END detect_braille_from_bytes (FAILURE) ---")
-                return {
-                    "error": "Detection failed",
-                    "detail": final_error_msg,
-                    "status_code": response.status_code
-                }
+                print("--- END detect_braille_from_bytes (NO RESULT) ---")
+                return {"error": "No detection result", "detail": "Detection returned no results"}
 
         except Exception as e:
             error_msg = f"Unexpected error inside detect_braille_from_bytes: {e}"
@@ -399,70 +335,298 @@ class BrailleDetector:
             traceback.print_exc()
             print("--- END detect_braille_from_bytes (FAILURE) ---")
             return {"error": "Detection internal error", "detail": error_msg}
+    
+    def detect_braille_from_bytes_internal(self, image_bytes: bytes) -> Optional[Dict]:
+        """Internal method to handle the actual detection"""
+        try:
+            # Save bytes to temporary file
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
+                temp_file.write(image_bytes)
+                temp_path = temp_file.name
+            
+            # Use the working detection method
+            if self.use_sdk and self.client:
+                # Use inference_sdk (the working approach)
+                result = self.client.run_workflow(
+                    workspace_name=self.workspace_name,
+                    workflow_id=self.workflow_id,
+                    images={"image": temp_path},
+                    use_cache=True
+                )
+            else:
+                # Fallback to HTTP requests
+                result = self._detect_braille_http(temp_path)
+            
+            # Clean up
+            import os
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
+            
+            return result
+            
+        except Exception as e:
+            print(f"Error in detect_braille_from_bytes_internal: {e}")
+            return None
+    
+    def detect_braille_with_fallback(self, image_path: str) -> Optional[Dict]:
+        """Try all detection methods with fallback"""
+        print(f"Starting Braille detection for: {image_path}")
+        
+        # Verify image exists and is readable
+        if not os.path.exists(image_path):
+            print(f"Image file not found: {image_path}")
+            return None
+        
+        try:
+            # Test image can be opened
+            from PIL import Image
+            with Image.open(image_path) as img:
+                print(f"Image info: {img.size}, {img.mode}")
+        except Exception as e:
+            print(f"Cannot open image: {e}")
+            return None
+        
+        # Try each method
+        methods = [
+            self.detect_braille_method1,
+            self.detect_braille_method2, 
+            self.detect_braille_method3,
+            self.detect_braille_method4
+        ]
+        
+        for i, method in enumerate(methods, 1):
+            print(f"\n--- Trying Detection Method {i} ---")
+            result = method(image_path)
+            if result:
+                print(f"✓ Method {i} successful!")
+                return result
+            else:
+                print(f"✗ Method {i} failed or returned no predictions")
+        
+        print("\n❌ All detection methods failed")
+        return None
+    
+    def detect_braille_method1(self, image_path: str) -> Optional[Dict]:
+        """Method 1: Standard Roboflow API with base64"""
+        try:
+            url = f"https://detect.roboflow.com/{self.workspace_name}/1"
+            
+            # Encode image
+            encoded_image = self._encode_image_from_path(image_path)
+            
+            # Prepare request - use the correct Roboflow API format
+            payload = {
+                "image": encoded_image,
+                "api_key": self.api_key,
+                "confidence": 0.1,  # Lower confidence threshold
+                "overlap": 0.5
+            }
+            
+            headers = {
+                "Content-Type": "application/json"
+            }
+            
+            print(f"Trying Method 1: {url}")
+            print(f"API Key length: {len(self.api_key)}")
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            
+            print(f"Response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                result = response.json()
+                print(f"Method 1 success: Response keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+                return result
+            else:
+                print(f"Method 1 failed: {response.status_code} - {response.text[:200]}")
+                return None
+                
+        except Exception as e:
+            print(f"Method 1 error: {e}")
+            return None
+    
+    def detect_braille_method2(self, image_path: str) -> Optional[Dict]:
+        """Method 2: Multipart form upload"""
+        try:
+            url = f"https://detect.roboflow.com/{self.workspace_name}/1"
+            
+            with open(image_path, 'rb') as image_file:
+                files = {
+                    'file': ('image.jpg', image_file, 'image/jpeg')
+                }
+                
+                data = {
+                    'api_key': self.api_key,
+                    'confidence': '0.1',
+                    'overlap': '0.5'
+                }
+                
+                print(f"Trying Method 2: {url}")
+                response = requests.post(url, files=files, data=data, timeout=30)
+                
+                print(f"Response status: {response.status_code}")
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    print(f"Method 2 success: Response keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+                    return result
+                else:
+                    print(f"Method 2 failed: {response.status_code} - {response.text[:200]}")
+                    return None
+                    
+        except Exception as e:
+            print(f"Method 2 error: {e}")
+            return None
+    
+    def detect_braille_method3(self, image_path: str) -> Optional[Dict]:
+        """Method 3: URL parameter format"""
+        try:
+            url = f"https://detect.roboflow.com/{self.workspace_name}/1?api_key={self.api_key}&confidence=0.1&overlap=0.5"
+            
+            encoded_image = self._encode_image_from_path(image_path)
+            
+            payload = encoded_image
+            
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded"
+            }
+            
+            print(f"Trying Method 3: {url}")
+            response = requests.post(url, data=payload, headers=headers, timeout=30)
+            
+            print(f"Response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                result = response.json()
+                print(f"Method 3 success: Response keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+                return result
+            else:
+                print(f"Method 3 failed: {response.status_code} - {response.text[:200]}")
+                return None
+                
+        except Exception as e:
+            print(f"Method 3 error: {e}")
+            return None
+    
+    def detect_braille_method4(self, image_path: str) -> Optional[Dict]:
+        """Method 4: Try alternative endpoints"""
+        endpoints = [
+            f"https://api.roboflow.com/{self.workspace_name}/1",
+            f"https://serverless.roboflow.com/{self.workspace_name}/1"
+        ]
+        
+        for i, endpoint in enumerate(endpoints, 1):
+            try:
+                url = endpoint
+                
+                encoded_image = self._encode_image_from_path(image_path)
+                
+                payload = {
+                    "image": encoded_image,
+                    "api_key": self.api_key,
+                    "confidence": 0.1,
+                    "overlap": 0.5
+                }
+                
+                headers = {
+                    "Content-Type": "application/json"
+                }
+                
+                print(f"Trying Method 4.{i}: {url}")
+                response = requests.post(url, json=payload, headers=headers, timeout=30)
+                
+                print(f"Response status: {response.status_code}")
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    print(f"Method 4.{i} success: Response keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+                    return result
+                else:
+                    print(f"Method 4.{i} failed: {response.status_code}")
+                    
+            except Exception as e:
+                print(f"Method 4.{i} error: {e}")
+                continue
+        
+        return None
+    
+    def _encode_image_from_path(self, image_path: str) -> str:
+        """Encode image from file path to base64 string"""
+        try:
+            with open(image_path, 'rb') as image_file:
+                encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+                return encoded_string
+        except Exception as e:
+            raise Exception(f"Failed to encode image: {e}")
+    
+    def _detect_braille_http(self, image_path: str) -> Optional[Dict]:
+        """Fallback detection using HTTP requests"""
+        try:
+            import requests
+            
+            # Encode image
+            image_data = self._encode_image_from_path(image_path)
+            
+            # Prepare request
+            url = f"{self.base_url}/{self.workspace_name}/workflows/{self.workflow_id}"
+            
+            payload = {
+                "image": image_data,
+                "api_key": self.api_key
+            }
+            
+            headers = {"Content-Type": "application/json"}
+            
+            print(f"🌐 Making HTTP request to: {url}")
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"❌ HTTP request failed: {response.status_code} - {response.text[:200]}")
+                return None
+                
+        except Exception as e:
+            print(f"❌ HTTP detection error: {e}")
+            return None
 
 # ... rest of your BrailleDetector class ...
         
     
     def extract_predictions(self, result: Dict) -> List[Dict]:
-        """Extract predictions with robust error handling"""
-        print(f"--- START extract_predictions ---")
-        print(f"Input result type: {type(result)}")
-        if isinstance(result, dict):
-            print(f"Input result keys: {list(result.keys())}")
-        elif isinstance(result, list):
-            print(f"Input result length: {len(result)}")
-        
-        if not result or "error" in result:
-            print("No result or error in result")
-            print("--- END extract_predictions (EMPTY) ---")
-            return []
-            
+        """Extract predictions from the result"""
         try:
-            predictions = []
+            if not result:
+                return []
             
-            # Handle different response structures
+            # Handle different result structures (matching the working approach)
             if isinstance(result, list) and len(result) > 0:
                 if "predictions" in result[0]:
-                    pred_data = result[0]["predictions"]
-                    if isinstance(pred_data, dict) and "predictions" in pred_data:
-                        predictions = pred_data["predictions"]
-                    elif isinstance(pred_data, list):
-                        predictions = pred_data
-            
+                    predictions_data = result[0]["predictions"]
+                    if "predictions" in predictions_data:
+                        return predictions_data["predictions"]
+                    elif isinstance(predictions_data, list):
+                        return predictions_data
+                elif "predictions" in result[0]:
+                    return result[0]["predictions"]
             elif isinstance(result, dict):
                 if "predictions" in result:
-                    pred_data = result["predictions"]
-                    if isinstance(pred_data, dict) and "predictions" in pred_data:
-                        predictions = pred_data["predictions"]
-                    elif isinstance(pred_data, list):
-                        predictions = pred_data
-                elif "outputs" in result:
-                    outputs = result["outputs"]
-                    if isinstance(outputs, list) and len(outputs) > 0:
-                        if "predictions" in outputs[0]:
-                            predictions = outputs[0]["predictions"]
+                    return result["predictions"]
+                elif "data" in result and "predictions" in result["data"]:
+                    return result["data"]["predictions"]
             
-            # Validate prediction structure
-            valid_predictions = []
-            for pred in predictions:
-                if isinstance(pred, dict) and all(key in pred for key in ['x', 'y', 'width', 'height', 'confidence', 'class']):
-                    try:
-                        pred['x'] = float(pred['x'])
-                        pred['y'] = float(pred['y'])
-                        pred['width'] = float(pred['width'])
-                        pred['height'] = float(pred['height'])
-                        pred['confidence'] = float(pred['confidence'])
-                        valid_predictions.append(pred)
-                    except (ValueError, TypeError):
-                        continue
+            print(f"⚠️ Unexpected result structure: {type(result)}")
+            if isinstance(result, dict):
+                print(f"   Keys: {list(result.keys())}")
+            elif isinstance(result, list) and len(result) > 0:
+                print(f"   First item keys: {list(result[0].keys()) if isinstance(result[0], dict) else 'Not a dict'}")
             
-            print(f"Extracted {len(valid_predictions)} valid predictions")
-            print("--- END extract_predictions (SUCCESS) ---")
-            return valid_predictions
+            return []
             
         except Exception as e:
-            print(f"Error in extract_predictions: {e}")
-            print("--- END extract_predictions (ERROR) ---")
+            print(f"Error extracting predictions: {e}")
             return []
     
     def organize_text_by_rows(self, predictions: List[Dict], min_confidence: float = 0.1) -> List[str]:
@@ -573,15 +737,36 @@ class handler(BaseHTTPRequestHandler):
                         'message': 'Please set ROBOFLOW_API_KEY environment variable'
                     }, 400)
                 else:
-                    self.send_json_response({
-                        'status': 'API key configured',
-                        'key_length': len(self.detector.api_key),
-                        'workspace': self.detector.workspace_name,
-                        'workflow': self.detector.workflow_id,
-                        'inference_sdk_available': False,
-                        'inference_client_ready': False,
-                        'api_url': self.detector.base_url
-                    })
+                    # Test the API key with a simple request
+                    try:
+                        test_url = f"{self.detector.base_url}/{self.detector.workspace_name}/workflows/{self.detector.workflow_id}"
+                        test_response = requests.get(
+                            test_url,
+                            params={"api_key": self.detector.api_key},
+                            timeout=10
+                        )
+                        
+                        self.send_json_response({
+                            'status': 'API key configured',
+                            'key_length': len(self.detector.api_key),
+                            'workspace': self.detector.workspace_name,
+                            'workflow': self.detector.workflow_id,
+                            'inference_sdk_available': False,
+                            'inference_client_ready': False,
+                            'api_url': self.detector.base_url,
+                            'test_status': test_response.status_code,
+                            'test_message': 'API key test completed',
+                            'key_warning': 'API key appears incomplete' if len(self.detector.api_key) < 30 else None
+                        })
+                    except Exception as e:
+                        self.send_json_response({
+                            'status': 'API key configured but test failed',
+                            'key_length': len(self.detector.api_key),
+                            'workspace': self.detector.workspace_name,
+                            'workflow': self.detector.workflow_id,
+                            'test_error': str(e),
+                            'key_warning': 'API key appears incomplete' if len(self.detector.api_key) < 30 else None
+                        })
             elif path.startswith('/favicon'):
                 self.send_response(404)
                 self.end_headers()
@@ -1183,14 +1368,17 @@ class handler(BaseHTTPRequestHandler):
                                          // Show SDK status (removed for Vercel memory limit)
                      const sdkStatus = '⚠️ Using HTTP requests (SDK removed for memory optimization)';
                     
-                    const statusDiv = document.createElement('div');
-                    statusDiv.style.cssText = 'background: #d4edda; border: 1px solid #c3e6cb; color: #155724; padding: 10px; border-radius: 5px; margin-bottom: 20px; font-size: 14px;';
-                    statusDiv.innerHTML = `
-                        <strong>🔧 System Status:</strong><br>
-                        • Roboflow API: ✓ Configured (Key length: ${status.roboflow_key_length})<br>
-                        • Inference SDK: ${sdkStatus}<br>
-                        • AI Assistant: ${status.ai_configured ? '✓ Configured' : '⚠️ Using fallback mode'}
-                    `;
+                                         const statusDiv = document.createElement('div');
+                     const keyWarning = status.roboflow_key_length < 30 ? 
+                         '<br>⚠️ <strong>Warning:</strong> API key appears incomplete (should be 32+ characters)' : '';
+                     
+                     statusDiv.style.cssText = 'background: #d4edda; border: 1px solid #c3e6cb; color: #155724; padding: 10px; border-radius: 5px; margin-bottom: 20px; font-size: 14px;';
+                     statusDiv.innerHTML = `
+                         <strong>🔧 System Status:</strong><br>
+                         • Roboflow API: ✓ Configured (Key length: ${status.roboflow_key_length})${keyWarning}<br>
+                         • Inference SDK: ${sdkStatus}<br>
+                         • AI Assistant: ${status.ai_configured ? '✓ Configured' : '⚠️ Using fallback mode'}
+                     `;
                     document.querySelector('.container').insertBefore(statusDiv, document.querySelector('.tabs'));
                 }
                 

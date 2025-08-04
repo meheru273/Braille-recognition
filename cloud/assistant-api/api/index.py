@@ -1,4 +1,4 @@
-# api/index.py - Simplified Braille Detection API
+# api/index.py - Final Fixed Braille Detection + Assistant API
 import json
 import os
 import base64
@@ -532,7 +532,7 @@ class BrailleDetector:
             return []
 
 # ============================================================================
-# SIMPLIFIED API HANDLER
+# MERGED API HANDLER
 # ============================================================================
 
 class handler(BaseHTTPRequestHandler):
@@ -552,7 +552,9 @@ class handler(BaseHTTPRequestHandler):
             elif path == '/health':
                 self.send_json_response({
                     'status': 'healthy',
+                    'features': ['braille_detection', 'ai_assistant', 'chat'],
                     'roboflow_configured': bool(self.detector.api_key),
+                    'ai_configured': bool(self.assistant.llm.api_key),
                     'detection_endpoint': f"{self.detector.base_url}/{self.detector.workspace_name}/{self.detector.model_version}/predict"
                 })
             elif path.startswith('/favicon'):
@@ -583,7 +585,13 @@ class handler(BaseHTTPRequestHandler):
                 return
             
             # Route to appropriate handler
-            if path == '/api/detect-and-process':
+            if path == '/api/chat':
+                self.handle_chat(data)
+            elif path == '/api/process-braille':
+                self.handle_braille_processing(data)
+            elif path == '/api/detect-braille':
+                self.handle_braille_detection(data)
+            elif path == '/api/detect-and-process':
                 self.handle_detect_and_process(data)
             else:
                 self.send_response(404)
@@ -593,6 +601,78 @@ class handler(BaseHTTPRequestHandler):
                 
         except Exception as e:
             self.send_error_response(f"POST error: {str(e)}")
+    
+    def handle_chat(self, data):
+        """Handle chat requests"""
+        try:
+            message = data.get('message', '').strip()
+            if not message:
+                self.send_error_response('Message is required', 400)
+                return
+            
+            response = self.assistant.chat(message)
+            self.send_json_response({'response': response})
+            
+        except Exception as e:
+            self.send_error_response(f'Chat processing error: {str(e)}')
+    
+    def handle_braille_processing(self, data):
+        """Handle braille text processing"""
+        try:
+            braille_strings = data.get('braille_strings', [])
+            if not braille_strings:
+                self.send_error_response('Braille strings are required', 400)
+                return
+            
+            result = self.assistant.process_braille_strings(braille_strings)
+            
+            self.send_json_response({
+                'text': result.text,
+                'explanation': result.explanation,
+                'confidence': result.confidence
+            })
+            
+        except Exception as e:
+            self.send_error_response(f'Braille processing error: {str(e)}')
+    
+    def handle_braille_detection(self, data):
+        """Handle braille detection from image"""
+        try:
+            image_data = data.get('image')
+            if not image_data:
+                self.send_error_response('Image data is required', 400)
+                return
+            
+            # Decode base64 image
+            try:
+                if image_data.startswith('data:image'):
+                    image_data = image_data.split(',')[1]
+                
+                image_bytes = base64.b64decode(image_data)
+            except Exception as e:
+                self.send_error_response(f'Invalid image data: {str(e)}', 400)
+                return
+            
+            # Run detection with improved method
+            detection_result = self.detector.detect_braille_with_fallback(image_bytes)
+            
+            if "error" in detection_result:
+                self.send_error_response(detection_result["error"])
+                return
+            
+            # Extract predictions
+            predictions = self.detector.extract_predictions(detection_result)
+            text_rows = self.detector.organize_text_by_rows(predictions)
+            
+            self.send_json_response({
+                'predictions': predictions,
+                'text_rows': text_rows,
+                'detection_count': len(predictions),
+                'raw_response': detection_result  # For debugging
+            })
+            
+        except Exception as e:
+            self.send_error_response(f'Braille detection error: {str(e)}')
     
     def handle_detect_and_process(self, data):
         """Handle end-to-end braille detection and processing"""
@@ -669,151 +749,160 @@ class handler(BaseHTTPRequestHandler):
             self.send_error_response(f'Detection and processing error: {str(e)}')
     
     def serve_html(self):
-        """Serve the simplified web interface"""
+        """Serve the enhanced web interface"""
         html_content = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Braille Recognition</title>
+    <title>Fixed Braille Recognition System</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
-            font-family: Arial, sans-serif;
-            background: #f5f5f5;
-            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh; padding: 20px;
         }
         .container { 
-            max-width: 600px; 
-            margin: 0 auto; 
-            background: white; 
-            border-radius: 10px; 
-            padding: 30px; 
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            max-width: 1000px; margin: 0 auto; background: white; 
+            border-radius: 15px; padding: 30px; 
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
         }
-        h1 { 
-            text-align: center; 
-            color: #333; 
-            margin-bottom: 30px;
+        .header { text-align: center; margin-bottom: 30px; color: #333; }
+        .header h1 { 
+            font-size: 2.5em; margin-bottom: 10px; 
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
         }
-        .upload-area {
-            border: 2px dashed #4CAF50; 
-            border-radius: 8px; 
-            padding: 40px;
-            text-align: center; 
-            cursor: pointer; 
-            margin-bottom: 20px;
-            transition: background-color 0.3s;
+        .status-banner {
+            background: #e8f5e8; border: 1px solid #4caf50; border-radius: 8px;
+            padding: 12px; margin-bottom: 20px; text-align: center;
         }
-        .upload-area:hover { 
-            background: #f0f8f0; 
+        .status-banner.error {
+            background: #ffe8e8; border-color: #f44336;
         }
-        .upload-area.dragover { 
-            background: #e8f5e8; 
-            border-color: #45a049; 
+        .input-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: 600; color: #555; }
+        input, textarea, select { 
+            width: 100%; padding: 12px; border: 2px solid #e0e0e0; 
+            border-radius: 8px; font-size: 16px; transition: border-color 0.3s;
         }
-        .image-preview { 
-            max-width: 100%; 
-            max-height: 300px; 
-            margin: 20px auto; 
-            display: block; 
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        input:focus, textarea:focus, select:focus { 
+            outline: none; border-color: #667eea; 
         }
         .btn { 
-            background: #4CAF50; 
-            color: white; 
-            padding: 12px 24px; 
-            border: none; 
-            border-radius: 6px; 
-            cursor: pointer; 
-            font-size: 16px; 
-            width: 100%;
-            margin-top: 10px;
+            background: linear-gradient(45deg, #667eea, #764ba2); 
+            color: white; padding: 12px 24px; border: none; 
+            border-radius: 8px; cursor: pointer; font-size: 16px; 
+            font-weight: 600; transition: transform 0.2s; margin: 5px;
         }
-        .btn:hover { 
-            background: #45a049; 
-        }
-        .btn:disabled { 
-            background: #cccccc; 
-            cursor: not-allowed; 
-        }
+        .btn:hover { transform: translateY(-2px); }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
         .result { 
-            margin-top: 20px; 
-            padding: 20px; 
-            background: #f8f9fa; 
-            border-radius: 8px; 
-            border-left: 4px solid #4CAF50;
+            margin-top: 20px; padding: 20px; background: #f8f9fa; 
+            border-radius: 8px; border-left: 4px solid #667eea;
         }
-        .loading { 
-            display: none; 
-            text-align: center; 
-            color: #4CAF50; 
-            font-weight: bold; 
-            margin: 20px 0;
+        .chat-container { 
+            max-height: 400px; overflow-y: auto; border: 2px solid #e0e0e0; 
+            border-radius: 8px; padding: 15px; margin-bottom: 15px; background: #fafafa;
         }
-        .status { 
-            background: #e8f5e8; 
-            border: 1px solid #4CAF50; 
-            border-radius: 6px;
-            padding: 10px; 
-            margin-bottom: 20px; 
-            text-align: center;
-            font-size: 14px;
+        .message { margin-bottom: 15px; padding: 10px; border-radius: 8px; }
+        .user-message { background: #667eea; color: white; margin-left: 20px; }
+        .assistant-message { background: white; border: 1px solid #e0e0e0; margin-right: 20px; }
+        .loading { display: none; text-align: center; color: #667eea; font-weight: 600; }
+        .tabs { display: flex; margin-bottom: 20px; border-bottom: 2px solid #e0e0e0; }
+        .tab { 
+            padding: 12px 24px; cursor: pointer; border: none; 
+            background: none; font-size: 16px; color: #666; transition: all 0.3s;
         }
-        .status.error {
-            background: #ffe8e8; 
-            border-color: #f44336;
-            color: #d32f2f;
+        .tab.active { color: #667eea; border-bottom: 2px solid #667eea; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .upload-area {
+            border: 2px dashed #667eea; border-radius: 8px; padding: 40px;
+            text-align: center; cursor: pointer; transition: all 0.3s;
         }
-        .detected-text {
-            background: #fff3cd;
-            border: 1px solid #ffc107;
-            border-radius: 6px;
-            padding: 15px;
-            margin: 15px 0;
-        }
-        .detected-text h4 {
-            margin-bottom: 10px;
-            color: #856404;
-        }
-        .text-row {
-            background: white;
-            padding: 8px;
-            margin: 5px 0;
-            border-radius: 4px;
-            font-family: monospace;
-            border-left: 3px solid #ffc107;
-        }
+        .upload-area:hover { background: #f0f7ff; }
+        .upload-area.dragover { background: #e6f3ff; border-color: #4a90e2; }
+        .image-preview { max-width: 300px; max-height: 200px; margin: 10px auto; display: block; }
+        .debug-info { font-size: 12px; color: #666; margin-top: 10px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🔤 Braille Recognition</h1>
+        <div class="header">
+            <h1>🔤 Fixed Braille Recognition System</h1>
+            <p>AI-powered braille detection with corrected API endpoints</p>
+        </div>
         
-        <div id="status" class="status" style="display: none;">
-            <span id="status-text">Checking system...</span>
+        <div id="status-banner" class="status-banner" style="display: none;">
+            <span id="status-text">Checking system status...</span>
         </div>
 
-        <div class="upload-area" onclick="document.getElementById('imageInput').click()" 
-             ondrop="handleDrop(event)" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)">
-            <p>📸 Click to upload or drag & drop braille image</p>
-            <input type="file" id="imageInput" accept="image/*" style="display: none;" onchange="handleImageUpload(event)">
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('detection')">Braille Detection</button>
+            <button class="tab" onclick="switchTab('processing')">Text Processing</button>
+            <button class="tab" onclick="switchTab('chat')">AI Chat</button>
         </div>
-        
-        <img id="imagePreview" class="image-preview" style="display: none;">
-        
-        <button class="btn" onclick="processImage()" id="processBtn" disabled>🔍 Detect Braille</button>
-        
-        <div class="loading" id="loading">Processing image...</div>
-        
-        <div id="result" class="result" style="display: none;">
-            <div id="output"></div>
+
+        <div id="detection-tab" class="tab-content active">
+            <div class="upload-area" onclick="document.getElementById('imageInput').click()" 
+                 ondrop="handleDrop(event)" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)">
+                <p>📸 Click to upload or drag & drop braille image</p>
+                <input type="file" id="imageInput" accept="image/*" style="display: none;" onchange="handleImageUpload(event)">
+            </div>
+            <img id="imagePreview" class="image-preview" style="display: none;">
+            <button class="btn" onclick="detectBraille()" id="detectBtn" disabled>🔍 Detect Braille</button>
+            <button class="btn" onclick="detectAndProcess()" id="processBtn" disabled>🚀 Detect & Process</button>
+            <div class="loading" id="detection-loading">Processing image...</div>
+            <div id="detection-result" class="result" style="display: none;">
+                <h3>Detection Results:</h3>
+                <div id="detection-output"></div>
+                <div id="debug-output" class="debug-info"></div>
+            </div>
+        </div>
+
+        <div id="processing-tab" class="tab-content">
+            <div class="input-group">
+                <label for="braille-input">Detected Braille Text (comma-separated):</label>
+                <textarea id="braille-input" rows="4" placeholder="Enter detected braille characters, e.g: hello, world"></textarea>
+            </div>
+            <button class="btn" onclick="processBraille()">🔍 Process Braille</button>
+            <div class="loading" id="braille-loading">Processing braille text...</div>
+            <div id="braille-result" class="result" style="display: none;">
+                <h3>Processing Results:</h3>
+                <div id="braille-output"></div>
+            </div>
+        </div>
+
+        <div id="chat-tab" class="tab-content">
+            <div id="chat-messages" class="chat-container">
+                <div class="message assistant-message">
+                    <strong>Assistant:</strong> Hello! I'm your AI assistant with FIXED braille detection. Upload an image to test!
+                </div>
+            </div>
+            <div class="input-group">
+                <input type="text" id="chat-input" placeholder="Type your message..." onkeypress="handleChatKeyPress(event)">
+            </div>
+            <button class="btn" onclick="sendMessage()">💬 Send Message</button>
+            <button class="btn" onclick="clearChat()" style="background: #dc3545;">🗑️ Clear Chat</button>
+            <div class="loading" id="chat-loading">Thinking...</div>
         </div>
     </div>
 
     <script>
         let currentImage = null;
+
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.getElementById(tabName + '-tab').classList.add('active');
+            event.target.classList.add('active');
+        }
 
         function handleDragOver(event) {
             event.preventDefault();
@@ -853,20 +942,88 @@ class handler(BaseHTTPRequestHandler):
                 preview.src = currentImage;
                 preview.style.display = 'block';
                 
+                document.getElementById('detectBtn').disabled = false;
                 document.getElementById('processBtn').disabled = false;
             };
             reader.readAsDataURL(file);
         }
 
-        async function processImage() {
+        async function detectBraille() {
             if (!currentImage) {
                 alert('Please upload an image first.');
                 return;
             }
 
-            const resultDiv = document.getElementById('result');
-            const outputDiv = document.getElementById('output');
-            const loading = document.getElementById('loading');
+            const resultDiv = document.getElementById('detection-result');
+            const outputDiv = document.getElementById('detection-output');
+            const debugDiv = document.getElementById('debug-output');
+            const loading = document.getElementById('detection-loading');
+
+            loading.style.display = 'block';
+            resultDiv.style.display = 'none';
+
+            try {
+                const response = await fetch('/api/detect-braille', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: currentImage })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    outputDiv.innerHTML = `
+                        <div style="margin-bottom: 15px;">
+                            <strong>✅ Detections Found:</strong> ${data.detection_count}
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                            <strong>📝 Text Rows:</strong>
+                            ${data.text_rows.length > 0 ? 
+                                '<ul style="margin-left: 20px;">' + 
+                                data.text_rows.map(row => `<li>'${row}'</li>`).join('') + 
+                                '</ul>' : 
+                                '<p>No organized text rows found</p>'
+                            }
+                        </div>
+                        <div>
+                            <strong>🔍 Raw Predictions:</strong> ${data.predictions.length} characters detected
+                        </div>
+                    `;
+                    
+                    // Show debug info
+                    debugDiv.innerHTML = `
+                        <strong>Debug Info:</strong><br>
+                        - API Response Status: OK<br>
+                        - Detection Count: ${data.detection_count}<br>
+                        - Organized Rows: ${data.text_rows.length}<br>
+                        - Raw Predictions: ${data.predictions.length}
+                    `;
+                    
+                    resultDiv.style.display = 'block';
+                } else {
+                    outputDiv.innerHTML = `<div style="color: red;">❌ Error: ${data.error}</div>`;
+                    debugDiv.innerHTML = `<strong>Debug:</strong> Detection failed - ${data.error}`;
+                    resultDiv.style.display = 'block';
+                }
+            } catch (error) {
+                outputDiv.innerHTML = `<div style="color: red;">❌ Network error: ${error.message}</div>`;
+                debugDiv.innerHTML = `<strong>Debug:</strong> Network error - ${error.message}`;
+                resultDiv.style.display = 'block';
+            }
+
+            loading.style.display = 'none';
+        }
+
+        async function detectAndProcess() {
+            if (!currentImage) {
+                alert('Please upload an image first.');
+                return;
+            }
+
+            const resultDiv = document.getElementById('detection-result');
+            const outputDiv = document.getElementById('detection-output');
+            const debugDiv = document.getElementById('debug-output');
+            const loading = document.getElementById('detection-loading');
 
             loading.style.display = 'block';
             resultDiv.style.display = 'none';
@@ -881,35 +1038,29 @@ class handler(BaseHTTPRequestHandler):
                 const data = await response.json();
 
                 if (response.ok) {
-                    let outputHTML = '';
-                    
-                    // Show detected text rows
-                    if (data.detection.text_rows && data.detection.text_rows.length > 0) {
-                        outputHTML += `
-                            <div class="detected-text">
-                                <h4>📝 Detected Braille Text:</h4>
-                                ${data.detection.text_rows.map(row => 
-                                    `<div class="text-row">${row}</div>`
-                                ).join('')}
-                            </div>
-                        `;
-                    }
-                    
-                    // Show processing results
-                    outputHTML += `
-                        <div style="margin-top: 20px;">
-                            <h4>🤖 AI Processing:</h4>
+                    outputDiv.innerHTML = `
+                        <div style="margin-bottom: 20px; padding: 15px; background: #e3f2fd; border-radius: 5px;">
+                            <h4>🎯 Detection Results</h4>
+                            <p><strong>Characters Found:</strong> ${data.detection.detection_count}</p>
+                            <p><strong>Text Rows:</strong> ${data.detection.text_rows.length > 0 ? data.detection.text_rows.join(', ') : 'None organized'}</p>
+                            ${data.detection.error ? `<p style="color: red;"><strong>Detection Error:</strong> ${data.detection.error}</p>` : ''}
+                        </div>
+                        <div style="padding: 15px; background: #f3e5f5; border-radius: 5px;">
+                            <h4>🤖 AI Processing Results</h4>
                             <p><strong>Processed Text:</strong> ${data.processing.text || 'No text processed'}</p>
                             <p><strong>Explanation:</strong> ${data.processing.explanation}</p>
                             <p><strong>Confidence:</strong> ${(data.processing.confidence * 100).toFixed(1)}%</p>
                         </div>
-                        <div style="margin-top: 15px; font-size: 14px; color: #666;">
-                            <strong>Detection Info:</strong> ${data.detection.detection_count} characters detected
-                            ${data.detection.error ? `<br><span style="color: red;">Error: ${data.detection.error}</span>` : ''}
-                        </div>
                     `;
                     
-                    outputDiv.innerHTML = outputHTML;
+                    debugDiv.innerHTML = `
+                        <strong>Debug Info:</strong><br>
+                        - Detection: ${data.detection.detection_count} chars found<br>
+                        - Organization: ${data.detection.text_rows.length} rows<br>
+                        - Processing: ${data.processing.text ? 'Success' : 'No text'}<br>
+                        - Confidence: ${(data.processing.confidence * 100).toFixed(1)}%
+                    `;
+                    
                     resultDiv.style.display = 'block';
                 } else {
                     outputDiv.innerHTML = `<div style="color: red;">❌ Error: ${data.error}</div>`;
@@ -923,26 +1074,142 @@ class handler(BaseHTTPRequestHandler):
             loading.style.display = 'none';
         }
 
+        async function processBraille() {
+            const input = document.getElementById('braille-input').value.trim();
+            const resultDiv = document.getElementById('braille-result');
+            const outputDiv = document.getElementById('braille-output');
+            const loading = document.getElementById('braille-loading');
+
+            if (!input) {
+                alert('Please enter some braille text to process.');
+                return;
+            }
+
+            loading.style.display = 'block';
+            resultDiv.style.display = 'none';
+
+            try {
+                const response = await fetch('/api/process-braille', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        braille_strings: input.split(',').map(s => s.trim())
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    outputDiv.innerHTML = `
+                        <div style="margin-bottom: 15px;">
+                            <strong>Processed Text:</strong> ${data.text}
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                            <strong>Explanation:</strong> ${data.explanation}
+                        </div>
+                        <div>
+                            <strong>Confidence:</strong> ${(data.confidence * 100).toFixed(1)}%
+                        </div>
+                    `;
+                    resultDiv.style.display = 'block';
+                } else {
+                    outputDiv.innerHTML = `<div style="color: red;">Error: ${data.error}</div>`;
+                    resultDiv.style.display = 'block';
+                }
+            } catch (error) {
+                outputDiv.innerHTML = `<div style="color: red;">Network error: ${error.message}</div>`;
+                resultDiv.style.display = 'block';
+            }
+
+            loading.style.display = 'none';
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('chat-input');
+            const message = input.value.trim();
+            const messagesDiv = document.getElementById('chat-messages');
+            const loading = document.getElementById('chat-loading');
+
+            if (!message) return;
+
+            const userMessageDiv = document.createElement('div');
+            userMessageDiv.className = 'message user-message';
+            userMessageDiv.innerHTML = `<strong>You:</strong> ${message}`;
+            messagesDiv.appendChild(userMessageDiv);
+
+            input.value = '';
+            loading.style.display = 'block';
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: message })
+                });
+
+                const data = await response.json();
+
+                const assistantMessageDiv = document.createElement('div');
+                assistantMessageDiv.className = 'message assistant-message';
+                
+                if (response.ok) {
+                    assistantMessageDiv.innerHTML = `<strong>Assistant:</strong> ${data.response}`;
+                } else {
+                    assistantMessageDiv.innerHTML = `<strong>Assistant:</strong> <span style="color: red;">Error: ${data.error}</span>`;
+                }
+                
+                messagesDiv.appendChild(assistantMessageDiv);
+            } catch (error) {
+                const errorMessageDiv = document.createElement('div');
+                errorMessageDiv.className = 'message assistant-message';
+                errorMessageDiv.innerHTML = `<strong>Assistant:</strong> <span style="color: red;">Network error: ${error.message}</span>`;
+                messagesDiv.appendChild(errorMessageDiv);
+            }
+
+            loading.style.display = 'none';
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function handleChatKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        function clearChat() {
+            const messagesDiv = document.getElementById('chat-messages');
+            messagesDiv.innerHTML = `
+                <div class="message assistant-message">
+                    <strong>Assistant:</strong> Hello! I'm your AI assistant with FIXED braille detection. Upload an image to test!
+                </div>
+            `;
+        }
+
         // Check system status on load
         window.onload = async function() {
             try {
                 const response = await fetch('/health');
                 const status = await response.json();
                 
-                const statusDiv = document.getElementById('status');
+                const statusBanner = document.getElementById('status-banner');
                 const statusText = document.getElementById('status-text');
                 
-                if (status.roboflow_configured) {
-                    statusText.textContent = '✅ System Ready - Braille detection enabled';
-                    statusDiv.classList.remove('error');
+                if (status.roboflow_configured && status.ai_configured) {
+                    statusText.textContent = `✅ System Ready - Detection: ${status.detection_endpoint}`;
+                    statusBanner.classList.remove('error');
+                } else if (status.roboflow_configured) {
+                    statusText.textContent = '⚠️ Roboflow OK, AI Assistant in fallback mode';
+                    statusBanner.classList.add('error');
                 } else {
                     statusText.textContent = '❌ Roboflow API key not configured - Detection disabled';
-                    statusDiv.classList.add('error');
+                    statusBanner.classList.add('error');
+                    document.getElementById('detectBtn').disabled = true;
                     document.getElementById('processBtn').disabled = true;
                 }
                 
-                statusDiv.style.display = 'block';
+                statusBanner.style.display = 'block';
                 
+                console.log('System status:', status);
             } catch (error) {
                 console.log('Could not check system status:', error);
             }

@@ -249,13 +249,24 @@ class BrailleDetector:
     """Lightweight Braille Detection using direct HTTP requests"""
     
     def __init__(self):
-        self.api_key = os.getenv("ROBOFLOW_API_KEY")
+        # Try to get API key from environment, with fallback
+        env_key = os.getenv("ROBOFLOW_API_KEY")
+        if env_key:
+            self.api_key = env_key
+        else:
+            # Use the provided API key as fallback - this might need to be a full Roboflow API key
+            self.api_key = "RzOXFbriJONcee7MHKN8"
+            print("Using fallback API key - consider setting ROBOFLOW_API_KEY environment variable")
+            print("Note: The fallback key might be incomplete. Please check your Roboflow API key.")
+        
         if not self.api_key:
-            print("Warning: ROBOFLOW_API_KEY not found - detection will be disabled")
+            print("Warning: No Roboflow API key available - detection will be disabled")
+        else:
+            print(f"Using Roboflow API key: {self.api_key[:5]}...{self.api_key[-5:]}")
             
         self.workspace_name = "braille-to-text-0xo2p"
         self.workflow_id = "custom-workflow"
-        self.base_url = "https://detect.roboflow.com"
+        self.base_url = "https://serverless.roboflow.com"
     
     def _encode_image_from_bytes(self, image_bytes: bytes) -> str:
         """Encode image bytes to base64 string"""
@@ -287,22 +298,15 @@ class BrailleDetector:
 
             # --- Prepare Request Details ---
             # --- Option 1: Standard Serverless Inference Endpoint (More likely correct now) ---
-            url_option_1 = f"https://detect.roboflow.com/{self.workspace_name}/{self.workflow_id}"
+            url_option_1 = f"{self.base_url}/{self.workspace_name}/workflows/{self.workflow_id}"
             # --- Option 2: Legacy/Alternative Serverless Endpoint ---
-            url_option_2 = f"https://serverless.roboflow.com/{self.workspace_name}/workflows/{self.workflow_id}"
+            url_option_2 = f"https://detect.roboflow.com/{self.workspace_name}/{self.workflow_id}"
 
             headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}" # Use Bearer token
+                "Content-Type": "application/json"
             }
             payload = {
-                # "api_key": self.api_key, # DO NOT include api_key in the JSON body for this endpoint
-                "inputs": {
-                    "image": {
-                        "type": "base64",
-                        "value": encoded_image
-                    }
-                }
+                "image": encoded_image
             }
             params = {
                 "api_key": self.api_key # Pass API key as a query parameter
@@ -312,9 +316,10 @@ class BrailleDetector:
             print(f"   -> Trying URL Option 1: {url_option_1}")
             # Mask key for security in logs
             masked_key = self.api_key[:5] + '*' * (len(self.api_key) - 10) + self.api_key[-5:] if len(self.api_key) > 10 else '*' * len(self.api_key)
-            print(f"   -> Headers: {{'Content-Type': 'application/json', 'Authorization': 'Bearer {masked_key}'}}")
+            print(f"   -> Headers: {{'Content-Type': 'application/json'}}")
             print(f"   -> Query Params: {{'api_key': '{masked_key}'}}")
-            # print(f"   -> Payload (Inputs Snippet): {{'inputs': {{'image': {{'type': 'base64', 'value': '{encoded_image[:50]}...'}}}}}}") # Optional: log snippet
+            print(f"   -> Payload structure: {{'image': 'base64_string'}}")
+            print(f"   -> Image size: {len(encoded_image)} characters")
 
             # --- Make the Request ---
             print("3. Sending POST request...")
@@ -335,6 +340,11 @@ class BrailleDetector:
                     print("   -> Status 200 OK. Parsing JSON response...")
                     result_data = response.json()
                     print(f"   -> Successfully parsed response. Keys: {list(result_data.keys()) if isinstance(result_data, dict) else type(result_data)}")
+                    print(f"   -> Response type: {type(result_data)}")
+                    if isinstance(result_data, dict):
+                        print(f"   -> Response keys: {list(result_data.keys())}")
+                    elif isinstance(result_data, list):
+                        print(f"   -> Response list length: {len(result_data)}")
                     print("--- END detect_braille_from_bytes (SUCCESS) ---")
                     return result_data
                 else:
@@ -353,10 +363,19 @@ class BrailleDetector:
                     if response.status_code == 404:
                         print("   -> Trying alternative URL due to 404...")
                         try:
+                            # For the alternative URL, use the original payload structure
+                            alt_payload = {
+                                "inputs": {
+                                    "image": {
+                                        "type": "base64",
+                                        "value": encoded_image
+                                    }
+                                }
+                            }
                             alt_response = requests.post(
                                 url_option_2,
                                 headers=headers,
-                                json=payload,
+                                json=alt_payload,
                                 params=params,
                                 timeout=15
                             )
@@ -402,7 +421,16 @@ class BrailleDetector:
     
     def extract_predictions(self, result: Dict) -> List[Dict]:
         """Extract predictions with robust error handling"""
+        print(f"--- START extract_predictions ---")
+        print(f"Input result type: {type(result)}")
+        if isinstance(result, dict):
+            print(f"Input result keys: {list(result.keys())}")
+        elif isinstance(result, list):
+            print(f"Input result length: {len(result)}")
+        
         if not result or "error" in result:
+            print("No result or error in result")
+            print("--- END extract_predictions (EMPTY) ---")
             return []
             
         try:
@@ -444,24 +472,42 @@ class BrailleDetector:
                     except (ValueError, TypeError):
                         continue
             
+            print(f"Extracted {len(valid_predictions)} valid predictions")
+            print("--- END extract_predictions (SUCCESS) ---")
             return valid_predictions
             
         except Exception as e:
+            print(f"Error in extract_predictions: {e}")
+            print("--- END extract_predictions (ERROR) ---")
             return []
     
-    def organize_text_by_rows(self, predictions: List[Dict], min_confidence: float = 0.4) -> List[str]:
+    def organize_text_by_rows(self, predictions: List[Dict], min_confidence: float = 0.1) -> List[str]:
         """Organize detected characters into rows"""
+        print(f"--- START organize_text_by_rows ---")
+        print(f"Input predictions count: {len(predictions)}")
+        print(f"Min confidence threshold: {min_confidence}")
+        
         if not predictions:
+            print("No predictions to organize")
+            print("--- END organize_text_by_rows (EMPTY) ---")
             return []
         
         try:
             # Filter by confidence
+            print(f"Confidence levels in predictions:")
+            for i, pred in enumerate(predictions[:5]):  # Show first 5
+                print(f"  Prediction {i}: confidence={pred.get('confidence', 0)}, class={pred.get('class', 'unknown')}")
+            
             filtered_predictions = [
                 pred for pred in predictions 
                 if pred.get('confidence', 0) >= min_confidence
             ]
             
+            print(f"Predictions after confidence filtering: {len(filtered_predictions)}")
+            
             if not filtered_predictions:
+                print("No predictions meet confidence threshold")
+                print("--- END organize_text_by_rows (NO CONFIDENT PREDICTIONS) ---")
                 return []
             
             # Sort by Y coordinate
@@ -499,9 +545,13 @@ class BrailleDetector:
                 if row_text.strip():
                     rows.append(row_text)
             
+            print(f"Organized into {len(rows)} text rows")
+            print("--- END organize_text_by_rows (SUCCESS) ---")
             return rows
             
         except Exception as e:
+            print(f"Error in organize_text_by_rows: {e}")
+            print("--- END organize_text_by_rows (ERROR) ---")
             return []
 
 # ============================================================================

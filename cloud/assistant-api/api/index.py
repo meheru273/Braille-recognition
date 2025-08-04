@@ -1,854 +1,543 @@
-# api/index.py - Simplified Braille Detection API
+# api/index.py - Minimal Braille Detection with Intense Debugging
 import json
 import os
 import base64
 import requests
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import urlparse
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
+import traceback
+import time
+from datetime import datetime
 
-@dataclass
-class BrailleResult:
-    """Result from braille processing"""
-    text: str
-    explanation: str
-    confidence: float
+# ============================================================================
+# LOGGING & DEBUGGING UTILITIES
+# ============================================================================
+
+def debug_log(message, level="INFO"):
+    """Enhanced logging with timestamp and level"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    print(f"[{timestamp}] [{level}] {message}")
+
+def debug_dict(data, title="Debug Data"):
+    """Pretty print dictionary data"""
+    debug_log(f"=== {title} ===", "DEBUG")
+    try:
+        print(json.dumps(data, indent=2, default=str))
+    except:
+        print(str(data))
+    debug_log(f"=== End {title} ===", "DEBUG")
+
+def debug_exception(e, context=""):
+    """Log detailed exception information"""
+    debug_log(f"EXCEPTION in {context}: {str(e)}", "ERROR")
+    debug_log(f"Exception type: {type(e).__name__}", "ERROR")
+    debug_log("Traceback:", "ERROR")
+    traceback.print_exc()
+
+# ============================================================================
+# MINIMAL BRAILLE DETECTOR WITH INTENSE DEBUGGING
+# ============================================================================
 
 class BrailleDetector:
-    """Simplified Braille Detection with debugging"""
+    """Minimal Braille Detector with maximum debugging"""
     
     def __init__(self):
+        debug_log("Initializing BrailleDetector", "INIT")
+        
         self.api_key = os.getenv("ROBOFLOW_API_KEY")
         self.workspace_name = "braille-to-text-0xo2p"
         self.model_version = "1"
-        self.base_url = "https://detect.roboflow.com"  # Try detect endpoint
+        self.base_url = "https://api.roboflow.com"
         
-        print(f"BrailleDetector initialized:")
-        print(f"  API Key: {'Present' if self.api_key else 'Missing'}")
-        print(f"  Workspace: {self.workspace_name}")
-        print(f"  Model Version: {self.model_version}")
+        debug_log(f"API Key present: {bool(self.api_key)}", "INIT")
+        debug_log(f"Workspace: {self.workspace_name}", "INIT")
+        debug_log(f"Model Version: {self.model_version}", "INIT")
+        debug_log(f"Base URL: {self.base_url}", "INIT")
+        
+        if self.api_key:
+            debug_log(f"API Key prefix: {self.api_key[:8]}...", "INIT")
+        else:
+            debug_log("❌ NO API KEY FOUND", "ERROR")
     
-    def detect_braille_from_bytes(self, image_bytes: bytes) -> Dict:
-        """Detect braille with multiple endpoint attempts and detailed debugging"""
-        debug_info = {
-            "api_key_present": bool(self.api_key),
-            "image_size": len(image_bytes),
-            "attempts": []
-        }
+    def detect_braille(self, image_bytes):
+        """Detect braille with maximum debugging"""
+        debug_log("=== STARTING BRAILLE DETECTION ===", "DETECTION")
+        debug_log(f"Image size: {len(image_bytes)} bytes", "DETECTION")
         
         if not self.api_key:
-            debug_info["error"] = "ROBOFLOW_API_KEY not configured"
-            return {"error": "ROBOFLOW_API_KEY not configured", "debug": debug_info}
+            debug_log("❌ No API key - detection disabled", "ERROR")
+            return {"error": "ROBOFLOW_API_KEY not configured"}
         
-        print(f"🔍 Starting detection with image size: {len(image_bytes)} bytes")
-        
-        # Try different endpoints
-        endpoints_to_try = [
-            f"https://detect.roboflow.com/{self.workspace_name}/{self.model_version}",
-            f"https://api.roboflow.com/{self.workspace_name}/{self.model_version}/predict",
-            f"https://infer.roboflow.com/{self.workspace_name}/{self.model_version}"
-        ]
-        
-        for endpoint_idx, endpoint in enumerate(endpoints_to_try):
-            print(f"\n📡 Attempt {endpoint_idx + 1}/3: {endpoint}")
+        try:
+            # Step 1: Encode image
+            debug_log("Step 1: Encoding image to base64", "DETECTION")
+            start_time = time.time()
+            encoded_image = base64.b64encode(image_bytes).decode('utf-8')
+            encode_time = time.time() - start_time
+            debug_log(f"✅ Image encoded in {encode_time:.3f}s (length: {len(encoded_image)})", "DETECTION")
             
-            try:
-                # Encode image
-                encoded_image = base64.b64encode(image_bytes).decode('utf-8')
-                print(f"   Encoded image length: {len(encoded_image)} chars")
-                
-                # Try different payload formats
-                payloads_to_try = [
-                    # Format 1: Standard JSON payload
-                    {
-                        "api_key": self.api_key,
-                        "image": encoded_image,
-                        "confidence": 0.1,
-                        "overlap": 0.5
-                    },
-                    # Format 2: With model specification
-                    {
-                        "api_key": self.api_key,
-                        "image": encoded_image,
-                        "confidence": 0.05,
-                        "overlap": 0.3,
-                        "format": "json"
-                    },
-                    # Format 3: URL parameters
-                    None  # Will use URL params
-                ]
-                
-                for payload_idx, payload in enumerate(payloads_to_try):
-                    attempt_info = {
-                        "endpoint": endpoint,
-                        "payload_format": payload_idx + 1,
-                        "timestamp": str(datetime.now()) if 'datetime' in globals() else "unknown"
-                    }
+            # Step 2: Prepare request
+            debug_log("Step 2: Preparing API request", "DETECTION")
+            url = f"{self.base_url}/{self.workspace_name}/{self.model_version}/predict"
+            debug_log(f"Detection URL: {url}", "DETECTION")
+            
+            payload = {
+                "api_key": self.api_key,
+                "image": encoded_image,
+                "confidence": 0.3,
+                "overlap": 0.5
+            }
+            
+            headers = {"Content-Type": "application/json"}
+            
+            debug_log("Request payload prepared:", "DETECTION")
+            debug_dict({
+                "url": url,
+                "confidence": payload["confidence"],
+                "overlap": payload["overlap"],
+                "image_length": len(encoded_image),
+                "api_key_prefix": self.api_key[:8] + "..."
+            }, "Request Details")
+            
+            # Step 3: Make API call
+            debug_log("Step 3: Making API request to Roboflow", "DETECTION")
+            request_start = time.time()
+            
+            response = requests.post(
+                url, 
+                headers=headers, 
+                json=payload, 
+                timeout=30
+            )
+            
+            request_time = time.time() - request_start
+            debug_log(f"API request completed in {request_time:.3f}s", "DETECTION")
+            debug_log(f"Response status: {response.status_code}", "DETECTION")
+            debug_log(f"Response headers: {dict(response.headers)}", "DETECTION")
+            
+            # Step 4: Process response
+            debug_log("Step 4: Processing API response", "DETECTION")
+            
+            if response.status_code == 200:
+                debug_log("✅ HTTP 200 - Success", "DETECTION")
+                try:
+                    result = response.json()
+                    debug_log("✅ JSON parsing successful", "DETECTION")
+                    debug_dict(result, "API Response")
                     
-                    try:
-                        print(f"   🔄 Payload format {payload_idx + 1}/3")
-                        
-                        if payload is None:
-                            # Try with URL parameters
-                            url_with_params = f"{endpoint}?api_key={self.api_key}&confidence=0.05&overlap=0.3"
-                            print(f"      URL: {url_with_params[:100]}...")
-                            
-                            response = requests.post(
-                                url_with_params,
-                                data=encoded_image,
-                                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                                timeout=30
-                            )
-                            attempt_info["method"] = "URL_PARAMS"
-                        else:
-                            # Try with JSON payload
-                            print(f"      JSON payload with confidence: {payload['confidence']}")
-                            response = requests.post(
-                                endpoint,
-                                json=payload,
-                                headers={"Content-Type": "application/json"},
-                                timeout=30
-                            )
-                            attempt_info["method"] = "JSON_PAYLOAD"
-                        
-                        attempt_info["status_code"] = response.status_code
-                        attempt_info["response_length"] = len(response.text)
-                        
-                        print(f"      Status: {response.status_code}")
-                        print(f"      Response length: {len(response.text)} chars")
-                        
-                        if response.status_code == 200:
-                            try:
-                                result = response.json()
-                                predictions = result.get("predictions", [])
-                                
-                                attempt_info["predictions_count"] = len(predictions)
-                                attempt_info["success"] = True
-                                
-                                print(f"      ✅ JSON parsed successfully")
-                                print(f"      Predictions found: {len(predictions)}")
-                                
-                                if predictions:
-                                    # Log first few predictions for debugging
-                                    for i, pred in enumerate(predictions[:3]):
-                                        print(f"         Pred {i+1}: class='{pred.get('class', 'N/A')}', conf={pred.get('confidence', 0):.3f}")
-                                    
-                                    debug_info["attempts"] = debug_info.get("attempts", []) + [attempt_info]
-                                    result["debug"] = debug_info
-                                    print(f"🎉 SUCCESS! Returning {len(predictions)} predictions")
-                                    return result
-                                else:
-                                    print(f"      ⚠️ No predictions in successful response")
-                                    attempt_info["issue"] = "no_predictions"
-                            except json.JSONDecodeError as e:
-                                print(f"      ❌ JSON decode error: {e}")
-                                print(f"      Raw response: {response.text[:200]}...")
-                                attempt_info["issue"] = f"json_decode_error: {e}"
-                        else:
-                            print(f"      ❌ HTTP Error {response.status_code}")
-                            print(f"      Error response: {response.text[:300]}...")
-                            attempt_info["issue"] = f"http_error_{response.status_code}"
-                            attempt_info["error_text"] = response.text[:500]
-                            
-                    except requests.exceptions.Timeout:
-                        print(f"      ⏰ Request timeout")
-                        attempt_info["issue"] = "timeout"
-                    except requests.exceptions.ConnectionError as e:
-                        print(f"      🌐 Connection error: {e}")
-                        attempt_info["issue"] = f"connection_error: {e}"
-                    except Exception as e:
-                        print(f"      💥 Unexpected error: {e}")
-                        attempt_info["issue"] = f"unexpected_error: {e}"
+                    # Check for API errors
+                    if "error" in result:
+                        debug_log(f"❌ API returned error: {result['error']}", "ERROR")
+                        return {"error": result["error"]}
                     
-                    debug_info["attempts"] = debug_info.get("attempts", []) + [attempt_info]
-                        
-            except Exception as e:
-                print(f"   💥 Endpoint {endpoint} completely failed: {e}")
-                debug_info["attempts"] = debug_info.get("attempts", []) + [{
-                    "endpoint": endpoint,
-                    "issue": f"endpoint_failed: {e}"
-                }]
+                    predictions = result.get("predictions", [])
+                    debug_log(f"✅ Found {len(predictions)} predictions", "DETECTION")
+                    
+                    if predictions:
+                        debug_log("Sample prediction:", "DETECTION")
+                        debug_dict(predictions[0] if predictions else {}, "First Prediction")
+                    
+                    return result
+                    
+                except json.JSONDecodeError as e:
+                    debug_exception(e, "JSON parsing")
+                    debug_log(f"Raw response: {response.text[:500]}...", "ERROR")
+                    return {"error": f"Invalid JSON response: {str(e)}"}
+            
+            else:
+                debug_log(f"❌ HTTP Error {response.status_code}", "ERROR")
+                debug_log(f"Response text: {response.text}", "ERROR")
+                
+                if response.status_code == 401:
+                    return {"error": "Invalid API key or unauthorized"}
+                elif response.status_code == 404:
+                    return {"error": f"Model not found: {self.workspace_name}/v{self.model_version}"}
+                else:
+                    return {"error": f"API error {response.status_code}: {response.text}"}
         
-        print(f"\n❌ All detection methods failed after {len(debug_info['attempts'])} attempts")
-        return {"error": "All detection endpoints failed", "debug": debug_info}
+        except requests.exceptions.Timeout:
+            debug_log("❌ Request timeout", "ERROR")
+            return {"error": "Request timeout - API took too long to respond"}
+        
+        except requests.exceptions.ConnectionError as e:
+            debug_exception(e, "Connection error")
+            return {"error": f"Connection error: {str(e)}"}
+        
+        except Exception as e:
+            debug_exception(e, "Braille detection")
+            return {"error": f"Detection failed: {str(e)}"}
     
-    def organize_text_by_rows(self, predictions: List[Dict]) -> List[str]:
-        """Organize detected characters into readable rows with debugging"""
-        print(f"\n📝 Organizing {len(predictions)} predictions into rows")
+    def extract_predictions(self, result):
+        """Extract and validate predictions with debugging"""
+        debug_log("=== EXTRACTING PREDICTIONS ===", "EXTRACT")
         
-        if not predictions:
-            print("   ⚠️ No predictions to organize")
+        if not result or "error" in result:
+            debug_log("❌ No valid result to extract from", "ERROR")
             return []
         
         try:
-            # Log all predictions for debugging
-            print("   Raw predictions:")
+            predictions = result.get("predictions", [])
+            debug_log(f"Raw predictions count: {len(predictions)}", "EXTRACT")
+            
+            if not predictions:
+                debug_log("❌ No predictions found", "EXTRACT")
+                return []
+            
+            valid_predictions = []
+            required_keys = ['x', 'y', 'width', 'height', 'confidence', 'class']
+            
             for i, pred in enumerate(predictions):
-                print(f"     {i+1}: class='{pred.get('class', 'N/A')}', x={pred.get('x', 0):.1f}, y={pred.get('y', 0):.1f}, conf={pred.get('confidence', 0):.3f}")
-            
-            # Sort by Y position first, then X position
-            sorted_predictions = sorted(predictions, key=lambda p: (p.get('y', 0), p.get('x', 0)))
-            print(f"   Sorted by position (y, x)")
-            
-            # Group into rows based on Y position
-            rows = []
-            current_row = []
-            last_y = None
-            row_threshold = 30  # pixels
-            
-            print(f"   Grouping into rows (threshold: {row_threshold}px)")
-            
-            for i, pred in enumerate(sorted_predictions):
-                y_pos = pred.get('y', 0)
-                x_pos = pred.get('x', 0)
-                char_class = pred.get('class', '')
+                debug_log(f"Processing prediction {i+1}/{len(predictions)}", "EXTRACT")
+                debug_dict(pred, f"Raw Prediction {i+1}")
                 
-                if last_y is None or abs(y_pos - last_y) < row_threshold:
-                    # Same row
-                    current_row.append(pred)
-                    print(f"     Added '{char_class}' to current row (y_diff: {abs(y_pos - (last_y or y_pos)):.1f})")
-                else:
-                    # New row - process current row first
-                    if current_row:
-                        # Sort current row by X position and join characters
-                        current_row.sort(key=lambda p: p.get('x', 0))
-                        row_chars = [p.get('class', '') for p in current_row]
-                        row_text = ''.join(row_chars).strip()
-                        
-                        if row_text:
-                            rows.append(row_text)
-                            print(f"     ✅ Completed row {len(rows)}: '{row_text}' ({len(current_row)} chars)")
-                        else:
-                            print(f"     ⚠️ Skipped empty row")
+                if not isinstance(pred, dict):
+                    debug_log(f"❌ Prediction {i+1} is not a dict: {type(pred)}", "ERROR")
+                    continue
+                
+                missing_keys = [key for key in required_keys if key not in pred]
+                if missing_keys:
+                    debug_log(f"❌ Prediction {i+1} missing keys: {missing_keys}", "ERROR")
+                    continue
+                
+                try:
+                    cleaned_pred = {
+                        'x': float(pred['x']),
+                        'y': float(pred['y']),
+                        'width': float(pred['width']),
+                        'height': float(pred['height']),
+                        'confidence': max(0.0, min(1.0, float(pred['confidence']))),
+                        'class': str(pred['class']).strip()
+                    }
                     
-                    # Start new row
-                    current_row = [pred]
-                    print(f"     🆕 Started new row with '{char_class}' (y_diff: {abs(y_pos - (last_y or 0)):.1f})")
-                
-                last_y = y_pos
+                    if cleaned_pred['width'] > 0 and cleaned_pred['height'] > 0 and cleaned_pred['class']:
+                        valid_predictions.append(cleaned_pred)
+                        debug_log(f"✅ Prediction {i+1} validated", "EXTRACT")
+                        debug_dict(cleaned_pred, f"Cleaned Prediction {i+1}")
+                    else:
+                        debug_log(f"❌ Prediction {i+1} has invalid dimensions or empty class", "ERROR")
+                        
+                except (ValueError, TypeError) as e:
+                    debug_log(f"❌ Prediction {i+1} conversion failed: {str(e)}", "ERROR")
+                    continue
             
-            # Process final row
-            if current_row:
-                current_row.sort(key=lambda p: p.get('x', 0))
-                row_chars = [p.get('class', '') for p in current_row]
-                row_text = ''.join(row_chars).strip()
-                
-                if row_text:
-                    rows.append(row_text)
-                    print(f"     ✅ Final row {len(rows)}: '{row_text}' ({len(current_row)} chars)")
-            
-            print(f"   📋 Final result: {len(rows)} text rows")
-            for i, row in enumerate(rows):
-                print(f"     Row {i+1}: '{row}'")
-            
-            return rows
+            debug_log(f"✅ Extracted {len(valid_predictions)} valid predictions", "EXTRACT")
+            return valid_predictions
             
         except Exception as e:
-            print(f"   ❌ Error organizing text: {e}")
-            print(f"   🔄 Fallback: returning raw character classes")
-            # Fallback: just return all classes
-            fallback_result = [pred.get('class', '') for pred in predictions if pred.get('class', '').strip()]
-            print(f"   📋 Fallback result: {fallback_result}")
-            return fallback_result
+            debug_exception(e, "Prediction extraction")
+            return []
 
-class BrailleAssistant:
-    """Simple braille text processor"""
-    
-    def __init__(self):
-        self.api_key = os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY")
-        
-    def process_braille_strings(self, detected_strings: List[str]) -> BrailleResult:
-        """Process detected braille strings"""
-        if not detected_strings:
-            return BrailleResult(
-                text="",
-                explanation="No braille characters detected.",
-                confidence=0.0
-            )
-        
-        raw_text = " ".join(detected_strings).strip()
-        
-        # Basic processing without API
-        processed_text = self._clean_text(raw_text)
-        explanation = f"Detected braille text: '{processed_text}'"
-        confidence = 0.7 if processed_text else 0.1
-        
-        return BrailleResult(
-            text=processed_text,
-            explanation=explanation,
-            confidence=confidence
-        )
-    
-    def _clean_text(self, text: str) -> str:
-        """Basic text cleaning"""
-        if not text:
-            return ""
-        
-        # Remove extra spaces and clean up
-        cleaned = ' '.join(text.split())
-        return cleaned
+# ============================================================================
+# MINIMAL API HANDLER WITH DEBUGGING
+# ============================================================================
 
 class handler(BaseHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
+        debug_log("Initializing API handler", "HANDLER")
         self.detector = BrailleDetector()
-        self.assistant = BrailleAssistant()
         super().__init__(*args, **kwargs)
     
     def do_GET(self):
-        parsed_path = urlparse(self.path)
-        path = parsed_path.path
-        
-        if path == '/' or path == '/index.html':
-            self.serve_html()
-        elif path == '/health':
-            self.send_json_response({
-                'status': 'healthy',
-                'roboflow_configured': bool(self.detector.api_key)
-            })
-        else:
-            self.send_response(404)
-            self.end_headers()
-    
-    def do_POST(self):
-        parsed_path = urlparse(self.path)
-        path = parsed_path.path
-        
-        if path == '/api/detect-and-process':
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length).decode('utf-8')
-            data = json.loads(body)
-            
-            self.handle_detect_and_process(data)
-        else:
-            self.send_response(404)
-            self.end_headers()
-    
-    def handle_detect_and_process(self, data):
-        """Handle detection and processing with detailed debugging"""
-        debug_log = []
+        debug_log(f"GET request: {self.path}", "REQUEST")
         
         try:
-            debug_log.append("🚀 Starting detect_and_process")
+            if self.path == '/' or self.path == '/index.html':
+                self.serve_minimal_html()
+            elif self.path == '/health':
+                self.send_json_response({
+                    'status': 'healthy',
+                    'roboflow_configured': bool(self.detector.api_key),
+                    'detection_endpoint': f"{self.detector.base_url}/{self.detector.workspace_name}/{self.detector.model_version}/predict",
+                    'debug_mode': True
+                })
+            else:
+                debug_log(f"❌ 404 - Path not found: {self.path}", "ERROR")
+                self.send_json_response({'error': 'Not found'}, 404)
+                
+        except Exception as e:
+            debug_exception(e, "GET handler")
+            self.send_json_response({'error': f'GET error: {str(e)}'}, 500)
+    
+    def do_POST(self):
+        debug_log(f"POST request: {self.path}", "REQUEST")
+        
+        try:
+            # Read request body
+            content_length = int(self.headers.get('Content-Length', 0))
+            debug_log(f"Content length: {content_length}", "REQUEST")
             
-            image_data = data.get('image')
-            if not image_data:
-                debug_log.append("❌ No image data provided")
-                self.send_error_response('Image data is required', 400)
+            body = self.rfile.read(content_length).decode('utf-8') if content_length > 0 else '{}'
+            debug_log(f"Body length: {len(body)}", "REQUEST")
+            
+            try:
+                data = json.loads(body) if body else {}
+                debug_log("✅ JSON parsing successful", "REQUEST")
+                debug_dict(data, "Request Data")
+            except json.JSONDecodeError as e:
+                debug_log(f"❌ Invalid JSON: {str(e)}", "ERROR")
+                self.send_json_response({'error': 'Invalid JSON'}, 400)
                 return
             
-            debug_log.append(f"📸 Image data received: {len(str(image_data))} chars")
+            # Route to handler
+            if self.path == '/api/detect-braille':
+                self.handle_braille_detection(data)
+            else:
+                debug_log(f"❌ Unknown endpoint: {self.path}", "ERROR")
+                self.send_json_response({'error': 'Endpoint not found'}, 404)
+                
+        except Exception as e:
+            debug_exception(e, "POST handler")
+            self.send_json_response({'error': f'POST error: {str(e)}'}, 500)
+    
+    def handle_braille_detection(self, data):
+        """Handle braille detection with intense debugging"""
+        debug_log("=== HANDLING BRAILLE DETECTION ===", "HANDLER")
+        
+        try:
+            image_data = data.get('image')
+            if not image_data:
+                debug_log("❌ No image data provided", "ERROR")
+                self.send_json_response({'error': 'Image data required'}, 400)
+                return
             
-            # Decode image
+            debug_log(f"Image data length: {len(image_data)}", "HANDLER")
+            
+            # Decode base64 image
             try:
                 if image_data.startswith('data:image'):
-                    header, encoded = image_data.split(',', 1)
-                    debug_log.append(f"🔍 Image header: {header}")
-                    image_data = encoded
+                    debug_log("Removing data URL prefix", "HANDLER")
+                    image_data = image_data.split(',')[1]
                 
+                debug_log("Decoding base64 image", "HANDLER")
                 image_bytes = base64.b64decode(image_data)
-                debug_log.append(f"✅ Image decoded: {len(image_bytes)} bytes")
+                debug_log(f"✅ Image decoded: {len(image_bytes)} bytes", "HANDLER")
                 
             except Exception as e:
-                debug_log.append(f"❌ Image decode failed: {e}")
-                self.send_error_response(f'Invalid image data: {str(e)}', 400)
+                debug_exception(e, "Image decoding")
+                self.send_json_response({'error': f'Invalid image data: {str(e)}'}, 400)
                 return
             
             # Run detection
-            debug_log.append("🔍 Starting braille detection...")
-            detection_result = self.detector.detect_braille_from_bytes(image_bytes)
-            
-            # Extract debug info from detection
-            detection_debug = detection_result.get("debug", {})
-            debug_log.append(f"🔍 Detection completed. Attempts made: {len(detection_debug.get('attempts', []))}")
+            debug_log("Starting braille detection", "HANDLER")
+            detection_result = self.detector.detect_braille(image_bytes)
             
             if "error" in detection_result:
-                debug_log.append(f"❌ Detection failed: {detection_result['error']}")
-                
-                # Send detailed debug info in error response
+                debug_log(f"❌ Detection failed: {detection_result['error']}", "ERROR")
                 self.send_json_response({
-                    'success': False,
-                    'error': detection_result["error"],
-                    'detected_strings': [],
-                    'processed_text': '',
-                    'explanation': f'Detection failed: {detection_result["error"]}',
-                    'debug': {
-                        'log': debug_log,
-                        'detection_debug': detection_debug,
-                        'image_size': len(image_bytes),
-                        'api_configured': bool(self.detector.api_key)
-                    }
+                    'error': detection_result['error'],
+                    'debug': True
                 })
                 return
             
-            # Extract predictions and organize
-            predictions = detection_result.get("predictions", [])
-            debug_log.append(f"📊 Raw predictions: {len(predictions)}")
+            # Extract predictions
+            debug_log("Extracting predictions", "HANDLER")
+            predictions = self.detector.extract_predictions(detection_result)
             
-            # Log prediction details
-            if predictions:
-                confidence_values = [p.get('confidence', 0) for p in predictions]
-                debug_log.append(f"📈 Confidence range: {min(confidence_values):.3f} - {max(confidence_values):.3f}")
-                
-                classes_found = [p.get('class', '') for p in predictions]
-                unique_classes = list(set(classes_found))
-                debug_log.append(f"🔤 Unique classes: {unique_classes}")
-            
-            text_rows = self.detector.organize_text_by_rows(predictions)
-            debug_log.append(f"📝 Organized into {len(text_rows)} text rows")
-            
-            # Process with assistant
-            debug_log.append("🤖 Processing with AI assistant...")
-            processing_result = self.assistant.process_braille_strings(text_rows)
-            debug_log.append(f"✅ AI processing complete. Confidence: {processing_result.confidence:.2f}")
-            
-            # Prepare comprehensive response
             response_data = {
-                'success': True,
-                'detected_strings': text_rows,
-                'processed_text': processing_result.text,
-                'explanation': processing_result.explanation,
-                'confidence': processing_result.confidence,
+                'predictions': predictions,
                 'detection_count': len(predictions),
+                'raw_response': detection_result,
                 'debug': {
-                    'log': debug_log,
-                    'detection_debug': detection_debug,
+                    'timestamp': datetime.now().isoformat(),
                     'image_size': len(image_bytes),
-                    'api_configured': bool(self.detector.api_key),
-                    'predictions_sample': predictions[:5] if predictions else [],  # First 5 predictions
-                    'text_organization': {
-                        'raw_predictions': len(predictions),
-                        'organized_rows': len(text_rows),
-                        'processing_confidence': processing_result.confidence
-                    }
+                    'api_endpoint': f"{self.detector.base_url}/{self.detector.workspace_name}/{self.detector.model_version}/predict"
                 }
             }
             
-            debug_log.append("📤 Sending successful response")
-            print("\n".join(debug_log))  # Print to server console
+            debug_log(f"✅ Detection complete: {len(predictions)} predictions", "HANDLER")
+            debug_dict(response_data, "Final Response")
             
             self.send_json_response(response_data)
             
         except Exception as e:
-            debug_log.append(f"💥 Unexpected error: {str(e)}")
-            print("\n".join(debug_log))  # Print to server console
-            
-            import traceback
-            debug_log.append(f"📋 Traceback: {traceback.format_exc()}")
-            
+            debug_exception(e, "Braille detection handler")
             self.send_json_response({
-                'success': False,
-                'error': f'Processing error: {str(e)}',
-                'detected_strings': [],
-                'processed_text': '',
-                'explanation': f'System error occurred: {str(e)}',
-                'debug': {
-                    'log': debug_log,
-                    'error_type': type(e).__name__,
-                    'traceback': traceback.format_exc()
-                }
-            })
+                'error': f'Detection handler error: {str(e)}',
+                'debug': True
+            }, 500)
     
-    def serve_html(self):
-        """Serve simple HTML interface"""
+    def serve_minimal_html(self):
+        """Serve minimal HTML interface"""
+        debug_log("Serving minimal HTML interface", "HTML")
+        
         html_content = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Braille Recognition</title>
+    <title>Minimal Braille Detection - Debug Mode</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            font-family: Arial, sans-serif;
-            background: #f0f2f5;
-            padding: 20px;
-        }
-        .container { 
-            max-width: 600px; 
-            margin: 0 auto; 
-            background: white; 
-            border-radius: 12px; 
-            padding: 30px; 
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-        }
-        h1 { 
-            text-align: center; 
-            color: #2c3e50; 
-            margin-bottom: 30px;
-            font-size: 2.2em;
-        }
-        .status { 
-            background: #d4edda; 
-            border: 1px solid #c3e6cb; 
-            border-radius: 8px;
-            padding: 12px; 
-            margin-bottom: 20px; 
-            text-align: center;
-        }
-        .status.error {
-            background: #f8d7da; 
-            border-color: #f5c6cb;
-            color: #721c24;
-        }
-        .upload-area {
-            border: 3px dashed #3498db; 
-            border-radius: 12px; 
-            padding: 50px 20px;
-            text-align: center; 
-            cursor: pointer; 
-            margin-bottom: 20px;
-            transition: all 0.3s ease;
-            background: #f8f9fa;
-        }
-        .upload-area:hover { 
-            background: #e3f2fd; 
-            border-color: #2196f3;
-        }
-        .upload-area.dragover { 
-            background: #bbdefb; 
-            border-color: #1976d2; 
-        }
-        .upload-text {
-            font-size: 18px;
-            color: #34495e;
-            margin-bottom: 10px;
-        }
-        .upload-hint {
-            font-size: 14px;
-            color: #7f8c8d;
-        }
-        .image-preview { 
-            max-width: 100%; 
-            max-height: 300px; 
-            margin: 20px auto; 
-            display: block; 
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        }
-        .btn { 
-            background: linear-gradient(135deg, #3498db, #2980b9); 
-            color: white; 
-            padding: 15px 30px; 
-            border: none; 
-            border-radius: 8px; 
-            cursor: pointer; 
-            font-size: 16px; 
-            font-weight: 600;
-            width: 100%;
-            margin-top: 15px;
-            transition: all 0.3s ease;
-        }
-        .btn:hover { 
-            background: linear-gradient(135deg, #2980b9, #1f639a);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.4);
-        }
-        .btn:disabled { 
-            background: #bdc3c7; 
-            cursor: not-allowed; 
-            transform: none;
-            box-shadow: none;
-        }
-        .loading { 
-            display: none; 
-            text-align: center; 
-            color: #3498db; 
-            font-weight: 600; 
-            margin: 20px 0;
-            font-size: 16px;
-        }
-        .result { 
-            margin-top: 25px; 
-            padding: 20px; 
-            background: #f8f9fa; 
-            border-radius: 10px; 
-            border-left: 5px solid #3498db;
-        }
-        .detected-strings {
-            margin: 15px 0;
-        }
-        .detected-strings h4 {
-            color: #2c3e50;
-            margin-bottom: 10px;
-        }
-        .string-item {
-            background: #fff3cd;
-            border: 1px solid #ffeaa7;
-            border-radius: 6px;
-            padding: 10px;
-            margin: 8px 0;
-            font-family: 'Courier New', monospace;
-            font-size: 16px;
-            border-left: 4px solid #f39c12;
-        }
-        .processing-result {
-            margin-top: 20px;
-            padding: 15px;
-            background: #e8f5e8;
-            border-radius: 8px;
-            border-left: 4px solid #27ae60;
-        }
-        .error-message {
-            color: #e74c3c;
-            background: #fadbd8;
-            padding: 15px;
-            border-radius: 8px;
-            border-left: 4px solid #e74c3c;
-        }
+        body { font-family: monospace; padding: 20px; background: #f0f0f0; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; }
+        .debug { background: #000; color: #0f0; padding: 10px; border-radius: 4px; font-size: 12px; overflow-x: auto; }
+        .btn { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin: 5px; }
+        .btn:hover { background: #0056b3; }
+        .result { background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 10px 0; border-left: 4px solid #007bff; }
+        .error { border-left-color: #dc3545; }
+        input[type="file"] { margin: 10px 0; }
+        img { max-width: 300px; max-height: 200px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🔤 Braille Recognition</h1>
+        <h1>🔍 Minimal Braille Detection - Debug Mode</h1>
+        <p>Ultra-minimal interface with maximum debugging output</p>
         
-        <div id="status" class="status" style="display: none;">
-            <span id="status-text">Checking system...</span>
-        </div>
-
-        <div class="upload-area" onclick="document.getElementById('imageInput').click()" 
-             ondrop="handleDrop(event)" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)">
-            <div class="upload-text">📸 Click to upload braille image</div>
-            <div class="upload-hint">Or drag and drop your image here</div>
-            <input type="file" id="imageInput" accept="image/*" style="display: none;" onchange="handleImageUpload(event)">
+        <div>
+            <input type="file" id="imageInput" accept="image/*" onchange="handleImageUpload(event)">
+            <button class="btn" onclick="detectBraille()" id="detectBtn" disabled>Detect Braille</button>
+            <button class="btn" onclick="checkHealth()">Check System</button>
+            <button class="btn" onclick="clearDebug()">Clear Debug</button>
         </div>
         
-        <img id="imagePreview" class="image-preview" style="display: none;">
+        <img id="imagePreview" style="display: none;">
         
-        <button class="btn" onclick="processImage()" id="processBtn" disabled>
-            🔍 Detect Braille Text
-        </button>
+        <div id="result"></div>
         
-        <div class="loading" id="loading">
-            <div>🔄 Processing your image...</div>
-            <div style="font-size: 14px; margin-top: 5px;">This may take a few seconds</div>
-        </div>
-        
-        <div id="result" class="result" style="display: none;">
-            <div id="output"></div>
-        </div>
+        <h3>🐛 Debug Output:</h3>
+        <div id="debug" class="debug">Ready for debugging...\n</div>
     </div>
 
     <script>
         let currentImage = null;
-
-        function handleDragOver(event) {
-            event.preventDefault();
-            event.currentTarget.classList.add('dragover');
+        
+        function log(message) {
+            const debug = document.getElementById('debug');
+            const timestamp = new Date().toISOString();
+            debug.innerHTML += `[${timestamp}] ${message}\n`;
+            debug.scrollTop = debug.scrollHeight;
+            console.log(message);
         }
-
-        function handleDragLeave(event) {
-            event.currentTarget.classList.remove('dragover');
-        }
-
-        function handleDrop(event) {
-            event.preventDefault();
-            event.currentTarget.classList.remove('dragover');
-            const files = event.dataTransfer.files;
-            if (files.length > 0) {
-                handleImageFile(files[0]);
-            }
-        }
-
+        
         function handleImageUpload(event) {
             const file = event.target.files[0];
-            if (file) {
-                handleImageFile(file);
-            }
-        }
-
-        function handleImageFile(file) {
+            if (!file) return;
+            
+            log(`📁 File selected: ${file.name} (${file.size} bytes, ${file.type})`);
+            
             if (!file.type.startsWith('image/')) {
+                log('❌ ERROR: Not an image file');
                 alert('Please select an image file.');
                 return;
             }
-
+            
             const reader = new FileReader();
             reader.onload = function(e) {
                 currentImage = e.target.result;
+                log(`✅ Image loaded: ${currentImage.length} characters`);
+                
                 const preview = document.getElementById('imagePreview');
                 preview.src = currentImage;
                 preview.style.display = 'block';
                 
-                document.getElementById('processBtn').disabled = false;
+                document.getElementById('detectBtn').disabled = false;
+                log('🎯 Detection button enabled');
             };
             reader.readAsDataURL(file);
         }
-
-        async function processImage() {
+        
+        async function detectBraille() {
             if (!currentImage) {
+                log('❌ ERROR: No image selected');
                 alert('Please upload an image first.');
                 return;
             }
-
+            
+            log('🚀 Starting braille detection...');
             const resultDiv = document.getElementById('result');
-            const outputDiv = document.getElementById('output');
-            const loading = document.getElementById('loading');
-
-            loading.style.display = 'block';
-            resultDiv.style.display = 'none';
-
+            resultDiv.innerHTML = '⏳ Processing...';
+            
             try {
-                const response = await fetch('/api/detect-and-process', {
+                log('📡 Sending POST request to /api/detect-braille');
+                log(`📊 Payload size: ${JSON.stringify({image: currentImage}).length} bytes`);
+                
+                const startTime = Date.now();
+                const response = await fetch('/api/detect-braille', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ image: currentImage })
                 });
-
+                const requestTime = Date.now() - startTime;
+                
+                log(`📡 Response received in ${requestTime}ms (Status: ${response.status})`);
+                
                 const data = await response.json();
-
-                if (data.success) {
-                    let outputHTML = '';
-                    
-                    // Show detected strings
-                    if (data.detected_strings && data.detected_strings.length > 0) {
-                        outputHTML += `
-                            <div class="detected-strings">
-                                <h4>📝 Detected Braille Text:</h4>
-                                ${data.detected_strings.map(str => 
-                                    `<div class="string-item">${str}</div>`
-                                ).join('')}
-                            </div>
-                        `;
-                    }
-                    
-                    // Show processing results
-                    outputHTML += `
-                        <div class="processing-result">
-                            <h4>🤖 Processed Result:</h4>
-                            <p><strong>Text:</strong> ${data.processed_text || 'No text processed'}</p>
-                            <p><strong>Explanation:</strong> ${data.explanation}</p>
-                            <p><strong>Detection Count:</strong> ${data.detection_count} characters</p>
-                            <p><strong>Confidence:</strong> ${(data.confidence * 100).toFixed(1)}%</p>
+                log('📋 Response data:');
+                log(JSON.stringify(data, null, 2));
+                
+                if (response.ok) {
+                    resultDiv.innerHTML = `
+                        <div class="result">
+                            <h3>✅ Detection Results</h3>
+                            <p><strong>Predictions Found:</strong> ${data.detection_count}</p>
+                            <p><strong>API Endpoint:</strong> ${data.debug?.api_endpoint || 'N/A'}</p>
+                            <p><strong>Image Size:</strong> ${data.debug?.image_size || 'N/A'} bytes</p>
+                            <details>
+                                <summary>Raw Predictions (${data.predictions.length})</summary>
+                                <pre>${JSON.stringify(data.predictions, null, 2)}</pre>
+                            </details>
+                            <details>
+                                <summary>Raw API Response</summary>
+                                <pre>${JSON.stringify(data.raw_response, null, 2)}</pre>
+                            </details>
                         </div>
                     `;
-                    
-                    // Add debug information
-                    if (data.debug) {
-                        outputHTML += `
-                            <div style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #6c757d;">
-                                <h4>🔧 Debug Information:</h4>
-                                <details style="margin-top: 10px;">
-                                    <summary style="cursor: pointer; font-weight: bold;">Click to expand debug details</summary>
-                                    <div style="margin-top: 10px; font-family: monospace; font-size: 12px;">
-                                        <p><strong>Image Size:</strong> ${data.debug.image_size} bytes</p>
-                                        <p><strong>API Configured:</strong> ${data.debug.api_configured ? 'Yes' : 'No'}</p>
-                                        <p><strong>Detection Attempts:</strong> ${data.debug.detection_debug?.attempts?.length || 0}</p>
-                                        
-                                        ${data.debug.predictions_sample && data.debug.predictions_sample.length > 0 ? `
-                                            <p><strong>Sample Predictions:</strong></p>
-                                            <ul style="margin-left: 20px;">
-                                                ${data.debug.predictions_sample.map(pred => 
-                                                    `<li>Class: "${pred.class}", Confidence: ${(pred.confidence * 100).toFixed(1)}%, Position: (${pred.x.toFixed(1)}, ${pred.y.toFixed(1)})</li>`
-                                                ).join('')}
-                                            </ul>
-                                        ` : ''}
-                                        
-                                        <p><strong>Processing Log:</strong></p>
-                                        <ul style="margin-left: 20px; max-height: 200px; overflow-y: auto;">
-                                            ${data.debug.log.map(entry => `<li>${entry}</li>`).join('')}
-                                        </ul>
-                                        
-                                        ${data.debug.detection_debug?.attempts ? `
-                                            <p><strong>Detection Attempts:</strong></p>
-                                            <ul style="margin-left: 20px; max-height: 150px; overflow-y: auto;">
-                                                ${data.debug.detection_debug.attempts.map((attempt, i) => 
-                                                    `<li>Attempt ${i+1}: ${attempt.endpoint} - ${attempt.method || 'N/A'} - Status: ${attempt.status_code || 'N/A'} - ${attempt.issue || 'Success'}</li>`
-                                                ).join('')}
-                                            </ul>
-                                        ` : ''}
-                                    </div>
-                                </details>
-                            </div>
-                        `;
-                    }
-                    
-                    outputDiv.innerHTML = outputHTML;
+                    log(`✅ SUCCESS: Found ${data.detection_count} predictions`);
                 } else {
-                    let errorHTML = `
-                        <div class="error-message">
-                            <h4>❌ Detection Failed</h4>
-                            <p>${data.error}</p>
+                    resultDiv.innerHTML = `
+                        <div class="result error">
+                            <h3>❌ Detection Failed</h3>
+                            <p><strong>Error:</strong> ${data.error}</p>
                         </div>
                     `;
-                    
-                    // Add debug information for errors too
-                    if (data.debug) {
-                        errorHTML += `
-                            <div style="margin-top: 15px; padding: 15px; background: #fff3cd; border-radius: 8px; border-left: 4px solid #ffc107;">
-                                <h4>🔧 Debug Information:</h4>
-                                <details style="margin-top: 10px;">
-                                    <summary style="cursor: pointer; font-weight: bold;">Click to see what went wrong</summary>
-                                    <div style="margin-top: 10px; font-family: monospace; font-size: 12px;">
-                                        <p><strong>Image Size:</strong> ${data.debug.image_size || 'Unknown'} bytes</p>
-                                        <p><strong>API Configured:</strong> ${data.debug.api_configured ? 'Yes' : 'No'}</p>
-                                        
-                                        <p><strong>Debug Log:</strong></p>
-                                        <ul style="margin-left: 20px; max-height: 200px; overflow-y: auto;">
-                                            ${data.debug.log?.map(entry => `<li>${entry}</li>`).join('') || '<li>No debug log available</li>'}
-                                        </ul>
-                                        
-                                        ${data.debug.detection_debug?.attempts ? `
-                                            <p><strong>Detection Attempts:</strong></p>
-                                            <ul style="margin-left: 20px; max-height: 150px; overflow-y: auto;">
-                                                ${data.debug.detection_debug.attempts.map((attempt, i) => 
-                                                    `<li>Attempt ${i+1}: ${attempt.endpoint} - ${attempt.method || 'N/A'} - Status: ${attempt.status_code || 'Failed'} - Issue: ${attempt.issue || 'Unknown'}</li>`
-                                                ).join('')}
-                                            </ul>
-                                        ` : ''}
-                                        
-                                        ${data.debug.error_type ? `<p><strong>Error Type:</strong> ${data.debug.error_type}</p>` : ''}
-                                    </div>
-                                </details>
-                            </div>
-                        `;
-                    }
-                    
-                    outputDiv.innerHTML = errorHTML;
-                } Detection Failed</h4>
-                            <p>${data.error}</p>
-                        </div>
-                    `;
+                    log(`❌ FAILED: ${data.error}`);
                 }
                 
-                resultDiv.style.display = 'block';
-                
             } catch (error) {
-                outputDiv.innerHTML = `
-                    <div class="error-message">
-                        <h4>❌ Network Error</h4>
+                log(`💥 EXCEPTION: ${error.message}`);
+                resultDiv.innerHTML = `
+                    <div class="result error">
+                        <h3>💥 Network Error</h3>
                         <p>${error.message}</p>
                     </div>
                 `;
-                resultDiv.style.display = 'block';
             }
-
-            loading.style.display = 'none';
         }
-
-        // Check system status on load
-        window.onload = async function() {
+        
+        async function checkHealth() {
+            log('🏥 Checking system health...');
+            
             try {
                 const response = await fetch('/health');
                 const status = await response.json();
                 
-                const statusDiv = document.getElementById('status');
-                const statusText = document.getElementById('status-text');
+                log('🏥 Health check response:');
+                log(JSON.stringify(status, null, 2));
                 
-                if (status.roboflow_configured) {
-                    statusText.textContent = '✅ System Ready - Braille detection enabled';
-                    statusDiv.classList.remove('error');
-                } else {
-                    statusText.textContent = '❌ Roboflow API key missing - Detection disabled';
-                    statusDiv.classList.add('error');
-                    document.getElementById('processBtn').disabled = true;
-                }
-                
-                statusDiv.style.display = 'block';
+                const resultDiv = document.getElementById('result');
+                resultDiv.innerHTML = `
+                    <div class="result">
+                        <h3>🏥 System Status</h3>
+                        <p><strong>Status:</strong> ${status.status}</p>
+                        <p><strong>Roboflow Configured:</strong> ${status.roboflow_configured ? '✅' : '❌'}</p>
+                        <p><strong>Detection Endpoint:</strong> ${status.detection_endpoint}</p>
+                        <p><strong>Debug Mode:</strong> ${status.debug_mode ? '✅' : '❌'}</p>
+                    </div>
+                `;
                 
             } catch (error) {
-                console.log('Could not check system status:', error);
+                log(`💥 Health check failed: ${error.message}`);
             }
+        }
+        
+        function clearDebug() {
+            document.getElementById('debug').innerHTML = 'Debug cleared...\n';
+            log('🧹 Debug output cleared');
+        }
+        
+        // Initialize
+        window.onload = function() {
+            log('🚀 Application initialized');
+            checkHealth();
         };
     </script>
 </body>
@@ -860,18 +549,19 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(html_content.encode())
     
     def send_json_response(self, data, status_code=200):
+        debug_log(f"Sending JSON response (status: {status_code})", "RESPONSE")
+        debug_dict(data, "Response Data")
+        
         self.send_response(status_code)
         self.send_header('Content-type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
-    
-    def send_error_response(self, error_message, status_code=500):
-        self.send_json_response({'error': error_message}, status_code)
+        self.wfile.write(json.dumps(data, indent=2).encode())
     
     def do_OPTIONS(self):
+        debug_log("OPTIONS request received", "REQUEST")
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
@@ -879,4 +569,14 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
     
     def log_message(self, format, *args):
-        pass
+        # Custom logging
+        debug_log(f"HTTP: {format % args}", "HTTP")
+
+# ============================================================================
+# STARTUP DEBUG
+# ============================================================================
+
+debug_log("🚀 Starting Minimal Braille Detection API with Intense Debugging", "STARTUP")
+debug_log(f"Environment variables:", "STARTUP")
+debug_log(f"  ROBOFLOW_API_KEY: {'SET' if os.getenv('ROBOFLOW_API_KEY') else 'NOT SET'}", "STARTUP")
+debug_log("✅ API ready for requests", "STARTUP")

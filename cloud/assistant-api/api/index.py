@@ -265,11 +265,8 @@ class BrailleDetector:
         except Exception as e:
             raise Exception(f"Failed to encode image: {e}")
     
-        def detect_braille_from_bytes(self, image_bytes: bytes) -> Optional[Dict]:
-            """
-        Run Braille detection using image bytes.
-        Enhanced debugging version.
-        """
+    def detect_braille_from_bytes(self, image_bytes: bytes) -> Optional[Dict]:
+           
         if not self.api_key:
             error_msg = "ROBOFLOW_API_KEY not configured"
             print(f"ERROR: {error_msg}")

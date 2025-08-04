@@ -255,7 +255,7 @@ class BrailleDetector:
             
         self.workspace_name = "braille-to-text-0xo2p"
         self.workflow_id = "custom-workflow"
-        self.base_url = "https://serverless.roboflow.com"
+        self.base_url = "https://detect.roboflow.com"
     
     def _encode_image_from_bytes(self, image_bytes: bytes) -> str:
         """Encode image bytes to base64 string"""
@@ -265,50 +265,111 @@ class BrailleDetector:
         except Exception as e:
             raise Exception(f"Failed to encode image: {e}")
     
+        # ... (other methods like __init__, _encode_image_from_bytes, etc. remain) ...
+
     def detect_braille_from_bytes(self, image_bytes: bytes) -> Optional[Dict]:
-        """Run Braille detection using image bytes"""
+        """
+        Run Braille detection using image bytes.
+        Corrected implementation based on Roboflow Serverless Workflow API standards.
+        """
         if not self.api_key:
-            return {"error": "ROBOFLOW_API_KEY not configured"}
-            
+            error_msg = "ROBOFLOW_API_KEY not configured"
+            print(f"ERROR: {error_msg}")
+            return {"error": error_msg}
+
         try:
             # Encode image to base64
             encoded_image = self._encode_image_from_bytes(image_bytes)
-            
-            # Prepare the API endpoint
-            url = f"{self.base_url}/{self.workspace_name}/workflows/{self.workflow_id}"
-            
-            # Prepare headers
+            print(f"Image encoded successfully. Encoded string length: {len(encoded_image)}")
+
+            # Prepare the CORRECTED API endpoint for workflows
+            # Standard Serverless API format for workflows:
+            # https://detect.roboflow.com/{WORKSPACE_ID}/{WORKFLOW_ID}
+            # Ensure base_url ends without a slash, and components don't start with one
+            url = f"{self.base_url.rstrip('/')}/{self.workspace_name}/{self.workflow_id}".rstrip('/')
+            print(f"Roboflow API Endpoint: {url}")
+
+            # Prepare headers - Bearer token authentication is standard
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.api_key}"
             }
-            
-            # Prepare request payload
+            print("Headers prepared.")
+
+            # Prepare the request payload
+            # For workflows, the standard input structure is typically under 'inputs'
             payload = {
-                "api_key": self.api_key,
                 "inputs": {
                     "image": {
                         "type": "base64",
                         "value": encoded_image
                     }
                 }
+                # Note: api_key is passed as a query parameter, not in the JSON body for this endpoint
             }
-            
-            # Make the request
+            print("Payload prepared.")
+
+            # Prepare query parameters
+            # API key is typically passed as a query parameter for inference
+            params = {"api_key": self.api_key}
+            print("Query parameters prepared.")
+
+            # Make the POST request with timeout
+            print("Sending request to Roboflow API...")
             response = requests.post(
-                url, 
-                headers=headers, 
-                json=payload, 
-                timeout=25
+                url,
+                headers=headers,
+                json=payload,
+                params=params,
+                timeout=30 # Adjust timeout as needed (30 seconds)
             )
-            
+            print(f"Received response from Roboflow API. Status Code: {response.status_code}")
+
+            # Check response status
             if response.status_code == 200:
-                return response.json()
+                result_data = response.json()
+                print("API request successful. Response parsed.")
+                # Optional: Log a snippet of the successful response for debugging structure
+                # print(f"DEBUG: Sample of successful response: {str(result_data)[:500]}...")
+                return result_data
             else:
-                return {"error": f"API request failed: {response.status_code}"}
-                
+                # Handle non-200 responses by capturing the error message from the API
+                error_detail = response.text
+                try:
+                    # Try to parse JSON error response for better structure
+                    error_json = response.json()
+                    # Common error response structures
+                    error_detail = error_json.get('message', error_json.get('error', error_detail))
+                except Exception as parse_error:
+                    print(f"Warning: Could not parse error response JSON: {parse_error}")
+                    # If parsing fails, fall back to raw text
+                    pass
+
+                error_msg = f"Roboflow API error ({response.status_code}): {error_detail}"
+                print(f"ERROR: {error_msg}")
+                return {
+                    "error": "Detection failed",
+                    "detail": error_msg,
+                    "status_code": response.status_code
+                }
+
+        except requests.exceptions.Timeout:
+            error_msg = "Detection request timed out"
+            print(f"ERROR: {error_msg}")
+            return {"error": error_msg}
+        except requests.exceptions.RequestException as e:
+            # Catch network errors, connection errors, etc.
+            error_msg = f"Network error during detection: {str(e)}"
+            print(f"ERROR: {error_msg}")
+            return {"error": error_msg}
         except Exception as e:
-            return {"error": f"Detection error: {str(e)}"}
+            # Catch any other unexpected errors during the process
+            error_msg = f"Unexpected error during detection: {str(e)}"
+            print(f"ERROR: {error_msg}")
+            traceback.print_exc() # Print full traceback for debugging
+            return {"error": error_msg}
+
+    # ... (extract_predictions, organize_text_by_rows, create_annotated_image methods remain) ...
     
     def extract_predictions(self, result: Dict) -> List[Dict]:
         """Extract predictions with robust error handling"""

@@ -1,5 +1,8 @@
-# Minimal requirements for native Vercel handler
-requests==2.31.0
+# Lightweight requirements.txt without inference-sdk
+fastapi==0.111.0
+mangum==0.18.0
+Pillow==10.3.0
 python-dotenv==1.0.1
+requests==2.31.0
 
-# No FastAPI or Mangum needed for native handler
+# Removed inference-sdk to reduce bundle size significantly

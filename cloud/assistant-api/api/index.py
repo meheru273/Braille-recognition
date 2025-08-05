@@ -1,6 +1,7 @@
-# api/index.py - Fixed Braille Detection System for Vercel
+# api/index.py - Fixed Braille Detection System for Vercel (No SDK Dependencies)
 """
 Braille Detection System - Fixed for Vercel serverless deployment
+Uses direct HTTP requests instead of inference_sdk
 """
 
 from flask import Flask, request, jsonify, render_template_string
@@ -13,8 +14,8 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
-import tempfile
-from inference_sdk import InferenceHTTPClient
+import io
+from PIL import Image
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -153,111 +154,105 @@ class SimpleAssistant:
         return f"This appears to be braille text that reads: '{text}'"
 
 # ============================================================================
-# BRAILLE DETECTOR - FIXED VERSION
+# BRAILLE DETECTOR - DIRECT HTTP VERSION
 # ============================================================================
 
 class BrailleDetector:
     def __init__(self):
-        logger.info("Initializing BrailleDetector with InferenceHTTPClient")
+        logger.info("Initializing BrailleDetector with direct HTTP requests")
         self.api_key = os.getenv("ROBOFLOW_API_KEY")
+        self.workspace_name = "braille-to-text-0xo2p"
+        self.model_version = "1"
+        
+        # Different API endpoints to try
+        self.endpoints = [
+            f"https://detect.roboflow.com/{self.workspace_name}/{self.model_version}",
+            f"https://api.roboflow.com/{self.workspace_name}/{self.model_version}/predict"
+        ]
         
         if not self.api_key:
             logger.warning("❌ NO ROBOFLOW API KEY FOUND")
-            self.client = None
         else:
-            try:
-                self.client = InferenceHTTPClient(
-                    api_url="https://serverless.roboflow.com",
-                    api_key=self.api_key
-                )
-                logger.info("✅ InferenceHTTPClient initialized")
-            except Exception as e:
-                logger.error(f"Failed to initialize InferenceHTTPClient: {e}")
-                self.client = None
-        
-        self.workspace_name = "braille-to-text-0xo2p"
-        self.workflow_id = "custom-workflow"
-        self.model_id = f"{self.workspace_name}/1"  # Direct model fallback
+            logger.info("✅ Roboflow API key configured")
     
     def detect_braille(self, image_bytes: bytes) -> Dict:
         logger.info("=== STARTING BRAILLE DETECTION ===")
         
-        if not self.client:
-            return {"error": "ROBOFLOW_API_KEY not configured or client initialization failed"}
+        if not self.api_key:
+            return {"error": "ROBOFLOW_API_KEY not configured"}
         
         try:
-            # Save image bytes to temporary file for the SDK
-            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
-                tmp_file.write(image_bytes)
-                temp_path = tmp_file.name
+            # Convert image bytes to base64
+            encoded_image = base64.b64encode(image_bytes).decode('utf-8')
+            logger.info("Image encoded to base64")
             
-            try:
-                # Try workflow first
-                logger.info("Attempting workflow detection...")
-                result = self.client.run_workflow(
-                    workspace_name=self.workspace_name,
-                    workflow_id=self.workflow_id,
-                    images={"image": temp_path},
-                    use_cache=True
-                )
-                logger.info("✅ Workflow detection successful")
-                return result
-                
-            except Exception as workflow_error:
-                logger.warning(f"Workflow failed: {workflow_error}")
-                
-                # Fallback to direct model inference
-                logger.info("Attempting direct model inference...")
-                result = self.client.infer(temp_path, model_id=self.model_id)
-                logger.info("✅ Direct model inference successful")
-                return {"predictions": [result]}  # Wrap in expected format
-                
+            # Try different API endpoints
+            for i, endpoint in enumerate(self.endpoints):
+                try:
+                    logger.info(f"Attempting endpoint {i+1}: {endpoint}")
+                    result = self._try_endpoint(endpoint, encoded_image)
+                    if result and "error" not in result:
+                        logger.info(f"✅ Success with endpoint {i+1}")
+                        return result
+                    elif "error" in result:
+                        logger.warning(f"Endpoint {i+1} returned error: {result['error']}")
+                except Exception as e:
+                    logger.warning(f"Endpoint {i+1} failed: {str(e)}")
+                    continue
+            
+            # If all endpoints failed
+            return {"error": "All API endpoints failed"}
+            
         except Exception as e:
             logger.error(f"Detection failed: {str(e)}")
             return {"error": f"Detection failed: {str(e)}"}
+    
+    def _try_endpoint(self, endpoint: str, encoded_image: str) -> Dict:
+        """Try a specific API endpoint"""
         
-        finally:
-            # Clean up temp file
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
+        # Method 1: detect.roboflow.com format
+        if "detect.roboflow.com" in endpoint:
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded"
+            }
+            params = {
+                "api_key": self.api_key,
+                "confidence": 0.3,
+                "overlap": 0.5
+            }
+            response = requests.post(endpoint, params=params, data=encoded_image, headers=headers, timeout=25)
+            
+        # Method 2: api.roboflow.com format  
+        else:
+            headers = {
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "api_key": self.api_key,
+                "image": encoded_image,
+                "confidence": 0.3,
+                "overlap": 0.5
+            }
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=25)
+        
+        if response.status_code == 200:
+            result = response.json()
+            if "predictions" in result:
+                return result
+            else:
+                return {"error": f"Unexpected response format: {result}"}
+        else:
+            return {"error": f"HTTP {response.status_code}: {response.text}"}
     
     def extract_predictions(self, result: Dict) -> List[Dict]:
         if not result or "error" in result:
+            logger.warning("No valid result to extract predictions from")
             return []
         
         try:
-            # Handle workflow result format
-            if isinstance(result, list) and len(result) > 0:
-                predictions_data = result[0]
-                if "predictions" in predictions_data:
-                    predictions = predictions_data["predictions"]
-                    if "predictions" in predictions:
-                        return predictions["predictions"]
-                    else:
-                        return predictions
+            predictions = result.get("predictions", [])
+            logger.info(f"Extracted {len(predictions)} predictions")
             
-            # Handle direct model result format
-            if "predictions" in result:
-                predictions = result["predictions"]
-                if isinstance(predictions, list):
-                    return predictions
-                elif isinstance(predictions, dict) and "predictions" in predictions:
-                    return predictions["predictions"]
-            
-            return []
-            
-        except Exception as e:
-            logger.error(f"Error extracting predictions: {str(e)}")
-            return []
-    
-    def organize_text_by_rows(self, predictions: List[Dict]) -> List[str]:
-        if not predictions:
-            return []
-        
-        try:
-            # Filter valid predictions
             valid_predictions = []
             for pred in predictions:
                 if isinstance(pred, dict) and all(key in pred for key in ['x', 'y', 'width', 'height', 'confidence', 'class']):
@@ -270,14 +265,37 @@ class BrailleDetector:
                             'confidence': float(pred['confidence']),
                             'class': str(pred['class']).strip()
                         })
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Invalid prediction data: {pred}, error: {e}")
                         continue
+                else:
+                    logger.warning(f"Missing required keys in prediction: {pred}")
             
-            if not valid_predictions:
+            logger.info(f"Validated {len(valid_predictions)} predictions")
+            return valid_predictions
+            
+        except Exception as e:
+            logger.error(f"Error extracting predictions: {str(e)}")
+            return []
+    
+    def organize_text_by_rows(self, predictions: List[Dict]) -> List[str]:
+        if not predictions:
+            logger.info("No predictions to organize")
+            return []
+        
+        try:
+            # Filter by confidence
+            min_confidence = 0.3
+            filtered_predictions = [pred for pred in predictions if pred['confidence'] >= min_confidence]
+            logger.info(f"Filtered to {len(filtered_predictions)} predictions with confidence >= {min_confidence}")
+            
+            if not filtered_predictions:
                 return []
             
-            # Sort by Y coordinate
-            sorted_by_y = sorted(valid_predictions, key=lambda p: p['y'])
+            # Sort by Y coordinate (top to bottom)
+            sorted_by_y = sorted(filtered_predictions, key=lambda p: p['y'])
+            
+            # Group into rows
             rows = []
             current_group = [sorted_by_y[0]]
             
@@ -285,26 +303,32 @@ class BrailleDetector:
                 current_pred = sorted_by_y[i]
                 prev_pred = sorted_by_y[i-1]
                 
+                # Calculate threshold for same row
                 avg_height = (current_pred['height'] + prev_pred['height']) / 2
                 threshold = max(8, avg_height * 0.7)
                 y_diff = abs(current_pred['y'] - prev_pred['y'])
                 
                 if y_diff <= threshold:
+                    # Same row
                     current_group.append(current_pred)
                 else:
+                    # New row
                     if current_group:
+                        # Sort current group by X coordinate (left to right)
                         current_group.sort(key=lambda p: p['x'])
                         row_text = ''.join([p['class'] for p in current_group])
                         if row_text.strip():
                             rows.append(row_text)
                     current_group = [current_pred]
             
+            # Handle last group
             if current_group:
                 current_group.sort(key=lambda p: p['x'])
                 row_text = ''.join([p['class'] for p in current_group])
                 if row_text.strip():
                     rows.append(row_text)
             
+            logger.info(f"Organized into {len(rows)} text rows: {rows}")
             return rows
             
         except Exception as e:
@@ -319,14 +343,18 @@ class BrailleController:
     def __init__(self):
         self.detector = BrailleDetector()
         self.assistant = SimpleAssistant()
+        logger.info("BrailleController initialized")
     
     def detect_and_process(self, image_bytes: bytes) -> CompleteResult:
         start_time = datetime.now()
+        logger.info("Starting complete detection and processing pipeline")
         
         try:
+            # Step 1: Detection
             detection_result = self.detector.detect_braille(image_bytes)
             
             if "error" in detection_result:
+                logger.error(f"Detection failed: {detection_result['error']}")
                 return CompleteResult(
                     success=False,
                     detected_text="",
@@ -338,18 +366,26 @@ class BrailleController:
                     error=detection_result['error']
                 )
             
+            # Step 2: Extract predictions
             predictions = self.detector.extract_predictions(detection_result)
+            
+            # Step 3: Organize text
             text_rows = self.detector.organize_text_by_rows(predictions)
             
+            # Step 4: AI Processing
             if text_rows:
                 braille_result = self.assistant.process_braille_strings(text_rows)
                 detected_text = braille_result.text
                 explanation = braille_result.explanation
                 confidence = braille_result.confidence
+                logger.info(f"Successfully processed: '{detected_text}'")
             else:
                 detected_text = ""
                 explanation = "No braille characters detected in the image."
                 confidence = 0.0
+                logger.info("No braille text detected")
+            
+            total_time = int((datetime.now() - start_time).total_seconds() * 1000)
             
             return CompleteResult(
                 success=True,
@@ -358,11 +394,12 @@ class BrailleController:
                 confidence=confidence,
                 detection_count=len(predictions),
                 timestamp=datetime.now(),
-                total_time_ms=int((datetime.now() - start_time).total_seconds() * 1000)
+                total_time_ms=total_time
             )
             
         except Exception as e:
             logger.error(f"Pipeline error: {str(e)}")
+            logger.error(traceback.format_exc())
             return CompleteResult(
                 success=False,
                 detected_text="",
@@ -467,6 +504,8 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             border-radius: 10px;
             border-left: 4px solid #667eea;
             margin-bottom: 15px;
+            font-family: monospace;
+            font-size: 1.2em;
         }
         .explanation {
             background: #e3f2fd;
@@ -480,6 +519,14 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             max-height: 300px;
             border-radius: 10px;
             margin: 15px 0;
+        }
+        .stats {
+            background: #f1f3f4;
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 10px;
+            font-size: 0.9em;
+            color: #666;
         }
     </style>
 </head>
@@ -512,6 +559,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                 <h3>💡 Explanation</h3>
                 <div id="explanation" class="explanation"></div>
             </div>
+            <div id="stats" class="stats"></div>
         </div>
     </div>
 
@@ -559,6 +607,10 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         function displayResults(data) {
             document.getElementById('detectedText').textContent = data.detected_text || 'No text detected';
             document.getElementById('explanation').textContent = data.explanation || 'No explanation available';
+            
+            const stats = `Detected ${data.detection_count} characters • Confidence: ${(data.confidence * 100).toFixed(1)}% • Processing time: ${data.total_time_ms}ms`;
+            document.getElementById('stats').textContent = stats;
+            
             document.getElementById('results').classList.remove('hidden');
         }
 

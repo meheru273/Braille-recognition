@@ -9,9 +9,8 @@ import io
 
 class BrailleDetector:
     def __init__(self):
-        self.client = InferenceHTTPClient(
-            api_url="https://serverless.roboflow.com",
-            api_key=os.environ.get("ROBOFLOW_API_KEY")
+         api_url="https://serverless.roboflow.com",
+            api_key= os.getenv("ROBOFLOW_API_KEY")
         )
         self.workspace_name = "braille-to-text-0xo2p"
         self.workflow_id = "custom-workflow"

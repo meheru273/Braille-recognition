@@ -1,4 +1,4 @@
-# api/index.py - Fixed Syntax Error for Vercel
+# api/index.py - Fixed Braille Detection System for Vercel
 """
 Braille Detection System - Fixed for Vercel serverless deployment
 """
@@ -13,6 +13,8 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
+import tempfile
+from inference_sdk import InferenceHTTPClient
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -151,82 +153,131 @@ class SimpleAssistant:
         return f"This appears to be braille text that reads: '{text}'"
 
 # ============================================================================
-# BRAILLE DETECTOR
+# BRAILLE DETECTOR - FIXED VERSION
 # ============================================================================
 
 class BrailleDetector:
     def __init__(self):
-        logger.info("Initializing BrailleDetector")
+        logger.info("Initializing BrailleDetector with InferenceHTTPClient")
         self.api_key = os.getenv("ROBOFLOW_API_KEY")
-        self.workspace_name = "braille-to-text-0xo2p"
-        self.model_version = "1"
-        self.base_url = "https://api.roboflow.com"
         
         if not self.api_key:
             logger.warning("❌ NO ROBOFLOW API KEY FOUND")
+            self.client = None
+        else:
+            try:
+                self.client = InferenceHTTPClient(
+                    api_url="https://serverless.roboflow.com",
+                    api_key=self.api_key
+                )
+                logger.info("✅ InferenceHTTPClient initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize InferenceHTTPClient: {e}")
+                self.client = None
+        
+        self.workspace_name = "braille-to-text-0xo2p"
+        self.workflow_id = "custom-workflow"
+        self.model_id = f"{self.workspace_name}/1"  # Direct model fallback
     
     def detect_braille(self, image_bytes: bytes) -> Dict:
         logger.info("=== STARTING BRAILLE DETECTION ===")
         
-        if not self.api_key:
-            return {"error": "ROBOFLOW_API_KEY not configured"}
+        if not self.client:
+            return {"error": "ROBOFLOW_API_KEY not configured or client initialization failed"}
         
         try:
-            encoded_image = base64.b64encode(image_bytes).decode('utf-8')
+            # Save image bytes to temporary file for the SDK
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
+                tmp_file.write(image_bytes)
+                temp_path = tmp_file.name
             
-            url = f"{self.base_url}/{self.workspace_name}/{self.model_version}/predict"
-            
-            payload = {
-                "api_key": self.api_key,
-                "image": encoded_image,
-                "confidence": 0.3,
-                "overlap": 0.5
-            }
-            
-            headers = {"Content-Type": "application/json"}
-            response = requests.post(url, headers=headers, json=payload, timeout=25)
-            
-            if response.status_code == 200:
-                result = response.json()
-                if "error" in result:
-                    return {"error": result["error"]}
+            try:
+                # Try workflow first
+                logger.info("Attempting workflow detection...")
+                result = self.client.run_workflow(
+                    workspace_name=self.workspace_name,
+                    workflow_id=self.workflow_id,
+                    images={"image": temp_path},
+                    use_cache=True
+                )
+                logger.info("✅ Workflow detection successful")
                 return result
-            else:
-                return {"error": f"API error {response.status_code}: {response.text}"}
-        
+                
+            except Exception as workflow_error:
+                logger.warning(f"Workflow failed: {workflow_error}")
+                
+                # Fallback to direct model inference
+                logger.info("Attempting direct model inference...")
+                result = self.client.infer(temp_path, model_id=self.model_id)
+                logger.info("✅ Direct model inference successful")
+                return {"predictions": [result]}  # Wrap in expected format
+                
         except Exception as e:
             logger.error(f"Detection failed: {str(e)}")
             return {"error": f"Detection failed: {str(e)}"}
+        
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
     
     def extract_predictions(self, result: Dict) -> List[Dict]:
         if not result or "error" in result:
             return []
         
-        predictions = result.get("predictions", [])
-        valid_predictions = []
-        
-        for pred in predictions:
-            if isinstance(pred, dict) and all(key in pred for key in ['x', 'y', 'width', 'height', 'confidence', 'class']):
-                try:
-                    valid_predictions.append({
-                        'x': float(pred['x']),
-                        'y': float(pred['y']),
-                        'width': float(pred['width']),
-                        'height': float(pred['height']),
-                        'confidence': float(pred['confidence']),
-                        'class': str(pred['class']).strip()
-                    })
-                except (ValueError, TypeError):
-                    continue
-        
-        return valid_predictions
+        try:
+            # Handle workflow result format
+            if isinstance(result, list) and len(result) > 0:
+                predictions_data = result[0]
+                if "predictions" in predictions_data:
+                    predictions = predictions_data["predictions"]
+                    if "predictions" in predictions:
+                        return predictions["predictions"]
+                    else:
+                        return predictions
+            
+            # Handle direct model result format
+            if "predictions" in result:
+                predictions = result["predictions"]
+                if isinstance(predictions, list):
+                    return predictions
+                elif isinstance(predictions, dict) and "predictions" in predictions:
+                    return predictions["predictions"]
+            
+            return []
+            
+        except Exception as e:
+            logger.error(f"Error extracting predictions: {str(e)}")
+            return []
     
     def organize_text_by_rows(self, predictions: List[Dict]) -> List[str]:
         if not predictions:
             return []
         
         try:
-            sorted_by_y = sorted(predictions, key=lambda p: p.get('y', 0))
+            # Filter valid predictions
+            valid_predictions = []
+            for pred in predictions:
+                if isinstance(pred, dict) and all(key in pred for key in ['x', 'y', 'width', 'height', 'confidence', 'class']):
+                    try:
+                        valid_predictions.append({
+                            'x': float(pred['x']),
+                            'y': float(pred['y']),
+                            'width': float(pred['width']),
+                            'height': float(pred['height']),
+                            'confidence': float(pred['confidence']),
+                            'class': str(pred['class']).strip()
+                        })
+                    except (ValueError, TypeError):
+                        continue
+            
+            if not valid_predictions:
+                return []
+            
+            # Sort by Y coordinate
+            sorted_by_y = sorted(valid_predictions, key=lambda p: p['y'])
             rows = []
             current_group = [sorted_by_y[0]]
             
@@ -234,23 +285,23 @@ class BrailleDetector:
                 current_pred = sorted_by_y[i]
                 prev_pred = sorted_by_y[i-1]
                 
-                avg_height = (current_pred.get('height', 20) + prev_pred.get('height', 20)) / 2
+                avg_height = (current_pred['height'] + prev_pred['height']) / 2
                 threshold = max(8, avg_height * 0.7)
-                y_diff = abs(current_pred.get('y', 0) - prev_pred.get('y', 0))
+                y_diff = abs(current_pred['y'] - prev_pred['y'])
                 
                 if y_diff <= threshold:
                     current_group.append(current_pred)
                 else:
                     if current_group:
-                        current_group.sort(key=lambda p: p.get('x', 0))
-                        row_text = ''.join([p.get('class', '') for p in current_group])
+                        current_group.sort(key=lambda p: p['x'])
+                        row_text = ''.join([p['class'] for p in current_group])
                         if row_text.strip():
                             rows.append(row_text)
                     current_group = [current_pred]
             
             if current_group:
-                current_group.sort(key=lambda p: p.get('x', 0))
-                row_text = ''.join([p.get('class', '') for p in current_group])
+                current_group.sort(key=lambda p: p['x'])
+                row_text = ''.join([p['class'] for p in current_group])
                 if row_text.strip():
                     rows.append(row_text)
             
@@ -327,7 +378,7 @@ class BrailleController:
 controller = BrailleController()
 
 # ============================================================================
-# HTML TEMPLATE (Fixed the syntax error here)
+# HTML TEMPLATE
 # ============================================================================
 
 HTML_TEMPLATE = '''<!DOCTYPE html>

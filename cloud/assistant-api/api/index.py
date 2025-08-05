@@ -1,7 +1,6 @@
-# api/index.py - Fixed Braille Detection System for Vercel (No SDK Dependencies)
+# api/index.py - Fixed Braille Detection System for Vercel
 """
-Braille Detection System - Fixed for Vercel serverless deployment
-Uses direct HTTP requests instead of inference_sdk
+Braille Detection System - Optimized for Vercel serverless deployment
 """
 
 from flask import Flask, request, jsonify, render_template_string
@@ -15,9 +14,8 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 import io
-from PIL import Image
 
-# Configure logging
+# Configure logging for Vercel
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -700,6 +698,9 @@ def health_check():
         'ai_configured': bool(os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY"))
     })
 
-# For local development
+# For local development and Vercel compatibility
 if __name__ == '__main__':
     app.run(debug=True)
+
+# Vercel handler
+app = app

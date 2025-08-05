@@ -1,26 +1,538 @@
-# api/index.py - Clean API Layer using Controller Pattern
+# api/index.py - Simplified Braille Detection System
 """
-API layer that handles HTTP requests and delegates to the controller
-Clean separation following MVC pattern
+Simplified Braille Detection System - Detection to Assistant path only
+All components included in a single file for Vercel deployment
 """
 
 import json
 import os
 import base64
+import requests
 from http.server import BaseHTTPRequestHandler
 import traceback
 import logging
 from datetime import datetime
-from typing import Dict, Any
-
-# Import our controller
-from connector import BrailleController, create_braille_controller
+from typing import Dict, Any, List, Optional
+from dataclasses import dataclass
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global controller instance (initialized on first request)
+# ============================================================================
+# DATA MODELS
+# ============================================================================
+
+@dataclass
+class BrailleResult:
+    """Result from braille processing"""
+    text: str
+    explanation: str
+    confidence: float
+
+@dataclass
+class CompleteResult:
+    """Combined result from detection + processing"""
+    success: bool
+    detected_text: str
+    explanation: str
+    confidence: float
+    detection_count: int
+    timestamp: datetime
+    total_time_ms: int
+    error: Optional[str] = None
+
+# ============================================================================
+# AI ASSISTANT (Embedded)
+# ============================================================================
+
+class SimpleAssistant:
+    """AI Assistant with API and fallback capabilities"""
+    
+    def __init__(self, api_key: str = None):
+        logger.info("Initializing SimpleAssistant")
+        self.api_key = api_key or os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY")
+        self.conversation_memory = {}
+        
+        if self.api_key:
+            if self.api_key.startswith("gsk_"):
+                self.base_url = "https://api.groq.com/openai/v1"
+                self.model = "llama-3.1-8b-instant"
+                self.provider = "groq"
+            else:
+                self.base_url = "https://api.openai.com/v1"
+                self.model = "gpt-3.5-turbo"
+                self.provider = "openai"
+            logger.info(f"✅ AI API configured: {self.provider}")
+        else:
+            self.provider = "fallback"
+            logger.info("⚠️ No AI API key - using fallback mode")
+    
+    def process_braille_strings(self, detected_strings: List[str]) -> BrailleResult:
+        """Process braille strings"""
+        logger.info(f"Processing {len(detected_strings)} braille strings")
+        
+        if not detected_strings:
+            return BrailleResult("", "No braille characters detected.", 0.0)
+        
+        try:
+            raw_text = " ".join(detected_strings).strip()
+            logger.info(f"Combined raw text: '{raw_text}'")
+            
+            if self.api_key:
+                processed_text = self._process_with_api(raw_text)
+                explanation = self._get_explanation(processed_text)
+                confidence = 0.8
+            else:
+                processed_text = self._fallback_process(raw_text)
+                explanation = f"Basic processing: {processed_text} (No AI API available)"
+                confidence = 0.5
+            
+            return BrailleResult(processed_text, explanation, confidence)
+            
+        except Exception as e:
+            logger.error(f"Processing error: {str(e)}")
+            fallback_text = " ".join(detected_strings)
+            return BrailleResult(fallback_text, f"Error processing: {str(e)}", 0.3)
+    
+    def _process_with_api(self, text: str) -> str:
+        """Process text using AI API"""
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": "You are a braille text processor. Clean up and correct braille text."},
+                    {"role": "user", "content": f"Clean and correct this braille text: '{text}'"}
+                ],
+                "max_tokens": 200,
+                "temperature": 0.3
+            }
+            
+            response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=payload, timeout=15)
+            
+            if response.status_code == 200:
+                result = response.json()
+                processed = result["choices"][0]["message"]["content"].strip()
+                logger.info(f"✅ AI processed result: '{processed}'")
+                return processed
+            else:
+                return self._fallback_process(text)
+                
+        except Exception as e:
+            logger.error(f"AI API exception: {str(e)}")
+            return self._fallback_process(text)
+    
+    def _fallback_process(self, text: str) -> str:
+        """Basic text processing without AI"""
+        cleaned = text.strip()
+        
+        if len(cleaned) > 10:
+            words = []
+            current_word = ""
+            
+            for char in cleaned:
+                if char.isspace() or char in ".,!?":
+                    if current_word:
+                        words.append(current_word)
+                        current_word = ""
+                    if char in ".,!?":
+                        words.append(char)
+                else:
+                    current_word += char
+            
+            if current_word:
+                words.append(current_word)
+            
+            return " ".join(words)
+        
+        return cleaned
+    
+    def _get_explanation(self, text: str) -> str:
+        """Get explanation for processed text"""
+        if self.api_key:
+            try:
+                headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                payload = {
+                    "model": self.model,
+                    "messages": [
+                        {"role": "user", "content": f"Briefly explain what this text is about: '{text}'"}
+                    ],
+                    "max_tokens": 100,
+                    "temperature": 0.3
+                }
+                
+                response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=payload, timeout=10)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    return result["choices"][0]["message"]["content"].strip()
+                    
+            except Exception as e:
+                logger.error(f"Explanation API error: {str(e)}")
+        
+        return f"This appears to be braille text that reads: '{text}'"
+    
+    def chat(self, user_message: str, thread_id: str = "default") -> str:
+        """Chat with context"""
+        try:
+            history = self.conversation_memory.get(thread_id, [])
+            
+            if not history:
+                system_msg = "You are a helpful AI assistant specializing in braille recognition and general assistance."
+                if not self.api_key:
+                    system_msg += " You are currently operating in fallback mode."
+                history = [{"role": "system", "content": system_msg}]
+            
+            history.append({"role": "user", "content": user_message})
+            
+            if len(history) > 7:
+                history = [history[0]] + history[-6:]
+            
+            if self.api_key:
+                response = self._generate_response(history)
+            else:
+                response = self._fallback_chat_response(user_message)
+            
+            history.append({"role": "assistant", "content": response})
+            self.conversation_memory[thread_id] = history
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Chat error: {str(e)}")
+            return f"I apologize, but I encountered an error: {str(e)}"
+    
+    def _generate_response(self, messages: List[Dict]) -> str:
+        """Generate AI response"""
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "model": self.model,
+                "messages": messages,
+                "max_tokens": 300,
+                "temperature": 0.3
+            }
+            
+            response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=payload, timeout=15)
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result["choices"][0]["message"]["content"].strip()
+            else:
+                return self._fallback_chat_response(messages[-1]["content"])
+                
+        except Exception as e:
+            return self._fallback_chat_response(messages[-1]["content"])
+    
+    def _fallback_chat_response(self, message: str) -> str:
+        """Fallback chat responses"""
+        message_lower = message.lower()
+        
+        if any(word in message_lower for word in ["hello", "hi", "hey"]):
+            return "Hello! I'm your Braille Recognition Assistant. I can help with braille processing and answer questions."
+        elif "help" in message_lower:
+            return "I can help with:\n1. Processing braille text\n2. Explaining concepts\n3. General conversation\n\nWhat would you like to do?"
+        elif "braille" in message_lower:
+            return "I can process braille characters and convert them to readable text. Please provide braille characters or ask specific questions."
+        elif any(word in message_lower for word in ["what", "explain", "tell me"]):
+            return f"I'd be happy to explain. However, I'm currently in limited mode. Could you provide more details about '{message[:30]}...'?"
+        else:
+            return f"I understand you're asking about: {message[:50]}{'...' if len(message) > 50 else ''}. I'm in limited mode but happy to help with basic questions."
+
+# ============================================================================
+# BRAILLE DETECTOR (Embedded)
+# ============================================================================
+
+class BrailleDetector:
+    """Braille Detection using Roboflow API"""
+    
+    def __init__(self):
+        logger.info("Initializing BrailleDetector")
+        
+        self.api_key = os.getenv("ROBOFLOW_API_KEY")
+        self.workspace_name = "braille-to-text-0xo2p"
+        self.model_version = "1"
+        self.base_url = "https://api.roboflow.com"
+        
+        logger.info(f"API Key present: {bool(self.api_key)}")
+        
+        if not self.api_key:
+            logger.warning("❌ NO ROBOFLOW API KEY FOUND")
+    
+    def detect_braille(self, image_bytes: bytes) -> Dict:
+        """Detect braille in image"""
+        logger.info("=== STARTING BRAILLE DETECTION ===")
+        logger.info(f"Image size: {len(image_bytes)} bytes")
+        
+        if not self.api_key:
+            return {"error": "ROBOFLOW_API_KEY not configured"}
+        
+        try:
+            # Encode image
+            encoded_image = base64.b64encode(image_bytes).decode('utf-8')
+            
+            # Prepare request
+            url = f"{self.base_url}/{self.workspace_name}/{self.model_version}/predict"
+            
+            payload = {
+                "api_key": self.api_key,
+                "image": encoded_image,
+                "confidence": 0.3,
+                "overlap": 0.5
+            }
+            
+            headers = {"Content-Type": "application/json"}
+            
+            # Make API call
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            
+            logger.info(f"Response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                try:
+                    result = response.json()
+                    
+                    if "error" in result:
+                        logger.error(f"API returned error: {result['error']}")
+                        return {"error": result["error"]}
+                    
+                    predictions = result.get("predictions", [])
+                    logger.info(f"✅ Found {len(predictions)} predictions")
+                    
+                    return result
+                    
+                except json.JSONDecodeError as e:
+                    error_msg = f"Invalid JSON response: {str(e)}"
+                    logger.error(error_msg)
+                    return {"error": error_msg}
+            
+            else:
+                logger.error(f"HTTP Error {response.status_code}: {response.text}")
+                
+                if response.status_code == 401:
+                    return {"error": "Invalid API key or unauthorized"}
+                elif response.status_code == 404:
+                    return {"error": f"Model not found: {self.workspace_name}/v{self.model_version}"}
+                else:
+                    return {"error": f"API error {response.status_code}: {response.text}"}
+        
+        except requests.exceptions.Timeout:
+            return {"error": "Request timeout - API took too long"}
+        except Exception as e:
+            logger.error(f"Detection failed: {str(e)}")
+            return {"error": f"Detection failed: {str(e)}"}
+    
+    def extract_predictions(self, result: Dict) -> List[Dict]:
+        """Extract and validate predictions"""
+        if not result or "error" in result:
+            return []
+        
+        try:
+            predictions = result.get("predictions", [])
+            valid_predictions = []
+            required_keys = ['x', 'y', 'width', 'height', 'confidence', 'class']
+            
+            for pred in predictions:
+                if not isinstance(pred, dict):
+                    continue
+                
+                missing_keys = [key for key in required_keys if key not in pred]
+                if missing_keys:
+                    continue
+                
+                try:
+                    cleaned_pred = {
+                        'x': float(pred['x']),
+                        'y': float(pred['y']),
+                        'width': float(pred['width']),
+                        'height': float(pred['height']),
+                        'confidence': max(0.0, min(1.0, float(pred['confidence']))),
+                        'class': str(pred['class']).strip()
+                    }
+                    
+                    if cleaned_pred['width'] > 0 and cleaned_pred['height'] > 0 and cleaned_pred['class']:
+                        valid_predictions.append(cleaned_pred)
+                        
+                except (ValueError, TypeError):
+                    continue
+            
+            logger.info(f"✅ Extracted {len(valid_predictions)} valid predictions")
+            return valid_predictions
+            
+        except Exception as e:
+            logger.error(f"Error extracting predictions: {str(e)}")
+            return []
+    
+    def organize_text_by_rows(self, predictions: List[Dict]) -> List[str]:
+        """Organize predictions into text rows"""
+        if not predictions:
+            return []
+        
+        try:
+            # Sort by Y coordinate
+            sorted_by_y = sorted(predictions, key=lambda p: p.get('y', 0))
+            
+            rows = []
+            current_group = [sorted_by_y[0]]
+            
+            for i in range(1, len(sorted_by_y)):
+                current_pred = sorted_by_y[i]
+                prev_pred = sorted_by_y[i-1]
+                
+                # Calculate threshold for row grouping
+                avg_height = (current_pred.get('height', 20) + prev_pred.get('height', 20)) / 2
+                threshold = max(8, avg_height * 0.7)
+                
+                y_diff = abs(current_pred.get('y', 0) - prev_pred.get('y', 0))
+                
+                if y_diff <= threshold:
+                    current_group.append(current_pred)
+                else:
+                    # Process current group
+                    if current_group:
+                        current_group.sort(key=lambda p: p.get('x', 0))
+                        row_text = ''.join([p.get('class', '') for p in current_group])
+                        if row_text.strip():
+                            rows.append(row_text)
+                    current_group = [current_pred]
+            
+            # Process final group
+            if current_group:
+                current_group.sort(key=lambda p: p.get('x', 0))
+                row_text = ''.join([p.get('class', '') for p in current_group])
+                if row_text.strip():
+                    rows.append(row_text)
+            
+            logger.info(f"✅ Organized into {len(rows)} text rows")
+            return rows
+            
+        except Exception as e:
+            logger.error(f"Error organizing text: {str(e)}")
+            return []
+
+# ============================================================================
+# BRAILLE CONTROLLER (Simplified)
+# ============================================================================
+
+class BrailleController:
+    """Simplified controller for detection -> assistant pipeline"""
+    
+    def __init__(self):
+        logger.info("Initializing simplified BrailleController")
+        
+        try:
+            self.detector = BrailleDetector()
+            logger.info("✅ BrailleDetector initialized")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize BrailleDetector: {e}")
+            raise
+        
+        try:
+            api_key = os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY")
+            self.assistant = SimpleAssistant(api_key=api_key)
+            logger.info("✅ SimpleAssistant initialized")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize SimpleAssistant: {e}")
+            raise
+        
+        logger.info("🎯 BrailleController ready")
+    
+    def detect_and_process(self, image_bytes: bytes) -> CompleteResult:
+        """Complete pipeline: detect braille + process with AI"""
+        logger.info("🚀 Starting detect and process operation")
+        start_time = datetime.now()
+        
+        try:
+            # Step 1: Detection
+            detection_result = self.detector.detect_braille(image_bytes)
+            
+            if "error" in detection_result:
+                logger.error(f"Detection failed: {detection_result['error']}")
+                return CompleteResult(
+                    success=False,
+                    detected_text="",
+                    explanation=f"Detection failed: {detection_result['error']}",
+                    confidence=0.0,
+                    detection_count=0,
+                    timestamp=datetime.now(),
+                    total_time_ms=int((datetime.now() - start_time).total_seconds() * 1000),
+                    error=detection_result['error']
+                )
+            
+            # Step 2: Extract predictions
+            predictions = self.detector.extract_predictions(detection_result)
+            
+            # Step 3: Organize into text rows
+            text_rows = self.detector.organize_text_by_rows(predictions)
+            
+            # Step 4: Process with AI
+            if text_rows:
+                braille_result = self.assistant.process_braille_strings(text_rows)
+                detected_text = braille_result.text
+                explanation = braille_result.explanation
+                confidence = braille_result.confidence
+            else:
+                detected_text = ""
+                explanation = "No braille characters detected in the image."
+                confidence = 0.0
+            
+            total_time = int((datetime.now() - start_time).total_seconds() * 1000)
+            
+            return CompleteResult(
+                success=True,
+                detected_text=detected_text,
+                explanation=explanation,
+                confidence=confidence,
+                detection_count=len(predictions),
+                timestamp=datetime.now(),
+                total_time_ms=total_time
+            )
+            
+        except Exception as e:
+            logger.error(f"Pipeline error: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            return CompleteResult(
+                success=False,
+                detected_text="",
+                explanation=f"Processing error: {str(e)}",
+                confidence=0.0,
+                detection_count=0,
+                timestamp=datetime.now(),
+                total_time_ms=int((datetime.now() - start_time).total_seconds() * 1000),
+                error=str(e)
+            )
+    
+    def chat(self, message: str, context: Dict = None, thread_id: str = "default") -> str:
+        """Chat with optional context"""
+        try:
+            enhanced_message = message
+            if context and context.get('detected_text'):
+                enhanced_message = f"Context: Recently detected braille text: '{context['detected_text']}'\n\nUser question: {message}"
+            
+            return self.assistant.chat(enhanced_message, thread_id)
+            
+        except Exception as e:
+            logger.error(f"Chat error: {str(e)}")
+            return f"Sorry, I encountered an error: {str(e)}"
+
+# ============================================================================
+# GLOBAL CONTROLLER INSTANCE
+# ============================================================================
+
 _controller_instance = None
 
 def get_controller() -> BrailleController:
@@ -29,383 +541,343 @@ def get_controller() -> BrailleController:
     
     if _controller_instance is None:
         logger.info("🏭 Creating new BrailleController instance")
-        # Configure controller with environment variables
-        assistant_config = {
-            'api_key': os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY")
-        }
-        _controller_instance = create_braille_controller(
-            detector_config={},
-            assistant_config=assistant_config
-        )
+        _controller_instance = BrailleController()
         logger.info("✅ Controller instance created")
     
     return _controller_instance
 
-class handler(BaseHTTPRequestHandler):
-    """
-    Clean API handler that delegates to controller
-    Handles HTTP concerns only (routing, parsing, response formatting)
-    """
-    
-    def __init__(self, *args, **kwargs):
-        logger.info("🌐 Initializing API handler")
-        super().__init__(*args, **kwargs)
-    
-    def do_GET(self):
-        """Handle GET requests"""
-        logger.info(f"📥 GET {self.path}")
-        
-        try:
-            if self.path == '/' or self.path == '/index.html':
-                self._serve_web_interface()
-            elif self.path == '/health' or self.path == '/api/health':
-                self._handle_health_check()
-            elif self.path == '/api/status':
-                self._handle_detailed_status()
-            else:
-                self._send_json_response({'error': 'Endpoint not found'}, 404)
-                
-        except Exception as e:
-            logger.error(f"GET error: {str(e)}")
-            self._send_json_response({'error': f'Server error: {str(e)}'}, 500)
-    
-    def do_POST(self):
-        """Handle POST requests"""
-        logger.info(f"📤 POST {self.path}")
-        
-        try:
-            # Parse request body
-            request_data = self._parse_request_body()
-            if request_data is None:
-                return  # Error already sent
-            
-            # Route to appropriate handler
-            if self.path == '/api/detect':
-                self._handle_detect_only(request_data)
-            elif self.path == '/api/process':
-                self._handle_process_only(request_data)
-            elif self.path == '/api/detect-and-process':
-                self._handle_detect_and_process(request_data)
-            elif self.path == '/api/chat':
-                self._handle_chat(request_data)
-            elif self.path == '/api/process-text':
-                self._handle_text_processing(request_data)
-            else:
-                self._send_json_response({'error': 'Endpoint not found'}, 404)
-                
-        except Exception as e:
-            logger.error(f"POST error: {str(e)}")
-            logger.error(traceback.format_exc())
-            self._send_json_response({'error': f'Server error: {str(e)}'}, 500)
-    
-    def do_OPTIONS(self):
-        """Handle CORS preflight requests"""
-        logger.info(f"🔄 OPTIONS {self.path}")
-        self._send_cors_headers()
-        self.end_headers()
-    
-    # ==========================================
-    # REQUEST HANDLERS
-    # ==========================================
-    
-    def _handle_health_check(self):
-        """Simple health check"""
-        try:
-            controller = get_controller()
-            status = controller.get_system_status()
-            
-            health_response = {
-                'status': 'healthy' if status['overall_health'] else 'degraded',
-                'timestamp': datetime.now().isoformat(),
-                'detector_ok': status['detector']['api_configured'],
-                'assistant_ok': status['assistant']['api_available'],
-                'version': '2.0.0'
-            }
-            
-            self._send_json_response(health_response)
-            
-        except Exception as e:
-            logger.error(f"Health check error: {str(e)}")
-            self._send_json_response({
-                'status': 'error',
-                'error': str(e),
-                'timestamp': datetime.now().isoformat()
-            }, 500)
-    
-    def _handle_detailed_status(self):
-        """Detailed system status"""
-        try:
-            controller = get_controller()
-            status = controller.get_system_status()
-            self._send_json_response(status)
-            
-        except Exception as e:
-            logger.error(f"Status error: {str(e)}")
-            self._send_json_response({'error': str(e)}, 500)
-    
-    def _handle_detect_only(self, data: Dict[str, Any]):
-        """Handle detection-only requests"""
-        logger.info("🔍 Processing detection-only request")
-        
-        # Validate and extract image
-        image_bytes = self._extract_image_bytes(data)
-        if image_bytes is None:
-            return  # Error already sent
-        
-        try:
-            controller = get_controller()
-            result = controller.detect_only(image_bytes)
-            
-            # Format response
-            response = {
-                'success': result.success,
-                'detection': {
-                    'predictions': result.predictions,
-                    'text_rows': result.text_rows,
-                    'detection_count': result.detection_count
-                }
-            }
-            
-            if result.error:
-                response['detection']['error'] = result.error
-            
-            self._send_json_response(response)
-            
-        except Exception as e:
-            logger.error(f"Detection handler error: {str(e)}")
-            self._send_json_response({'error': f'Detection failed: {str(e)}'}, 500)
-    
-    def _handle_process_only(self, data: Dict[str, Any]):
-        """Handle processing-only requests"""
-        logger.info("🤖 Processing process-only request")
-        
-        text_rows = data.get('text_rows', [])
-        if not isinstance(text_rows, list):
-            self._send_json_response({'error': 'text_rows must be a list'}, 400)
-            return
-        
-        try:
-            controller = get_controller()
-            result = controller.process_only(text_rows)
-            
-            response = {
-                'success': result.success,
-                'processing': {
-                    'text': result.text,
-                    'explanation': result.explanation,
-                    'confidence': result.confidence
-                }
-            }
-            
-            if result.error:
-                response['processing']['error'] = result.error
-            
-            self._send_json_response(response)
-            
-        except Exception as e:
-            logger.error(f"Processing handler error: {str(e)}")
-            self._send_json_response({'error': f'Processing failed: {str(e)}'}, 500)
-    
-    def _handle_detect_and_process(self, data: Dict[str, Any]):
-        """Handle complete detection + processing requests"""
-        logger.info("🚀 Processing complete detect-and-process request")
-        
-        # Validate and extract image
-        image_bytes = self._extract_image_bytes(data)
-        if image_bytes is None:
-            return  # Error already sent
-        
-        try:
-            controller = get_controller()
-            result = controller.detect_and_process(image_bytes)
-            
-            # Format response
-            response = {
-                'success': result.detection.success and result.processing.success,
-                'detection': {
-                    'success': result.detection.success,
-                    'predictions': result.detection.predictions,
-                    'text_rows': result.detection.text_rows,
-                    'detection_count': result.detection.detection_count
-                },
-                'processing': {
-                    'success': result.processing.success,
-                    'text': result.processing.text,
-                    'explanation': result.processing.explanation,
-                    'confidence': result.processing.confidence
-                },
-                'metadata': {
-                    'timestamp': result.timestamp.isoformat(),
-                    'total_time_ms': result.total_time_ms
-                }
-            }
-            
-            # Add errors if any
-            if result.detection.error:
-                response['detection']['error'] = result.detection.error
-            if result.processing.error:
-                response['processing']['error'] = result.processing.error
-            
-            self._send_json_response(response)
-            
-        except Exception as e:
-            logger.error(f"Complete processing handler error: {str(e)}")
-            self._send_json_response({'error': f'Complete processing failed: {str(e)}'}, 500)
-    
-    def _handle_chat(self, data: Dict[str, Any]):
-        """Handle chat requests"""
-        logger.info("💬 Processing chat request")
-        
-        message = data.get('message', '').strip()
-        if not message:
-            self._send_json_response({'error': 'Message is required'}, 400)
-            return
-        
-        context = data.get('context', {})
-        thread_id = data.get('thread_id', 'default')
-        
-        try:
-            controller = get_controller()
-            response_text = controller.chat_with_context(message, context, thread_id)
-            
-            self._send_json_response({
-                'success': True,
-                'response': response_text,
-                'thread_id': thread_id
-            })
-            
-        except Exception as e:
-            logger.error(f"Chat handler error: {str(e)}")
-            self._send_json_response({'error': f'Chat failed: {str(e)}'}, 500)
-    
-    def _handle_text_processing(self, data: Dict[str, Any]):
-        """Handle arbitrary text processing requests"""
-        logger.info("📝 Processing text processing request")
-        
-        text = data.get('text', '').strip()
-        task = data.get('task', 'explain')
-        
-        if not text:
-            self._send_json_response({'error': 'Text is required'}, 400)
-            return
-        
-        try:
-            controller = get_controller()
-            result = controller.process_text_only(text, task)
-            
-            self._send_json_response({
-                'success': True,
-                'result': result,
-                'task': task
-            })
-            
-        except Exception as e:
-            logger.error(f"Text processing handler error: {str(e)}")
-            self._send_json_response({'error': f'Text processing failed: {str(e)}'}, 500)
-    
-    # ==========================================
-    # UTILITY METHODS
-    # ==========================================
-    
-    def _parse_request_body(self) -> Dict[str, Any]:
-        """Parse and validate request body"""
-        try:
-            content_length = int(self.headers.get('Content-Length', 0))
-            if content_length == 0:
-                self._send_json_response({'error': 'Empty request body'}, 400)
-                return None
-            
-            body = self.rfile.read(content_length).decode('utf-8')
-            data = json.loads(body)
-            
-            logger.info(f"Request data keys: {list(data.keys())}")
-            return data
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON: {str(e)}")
-            self._send_json_response({'error': 'Invalid JSON in request body'}, 400)
-            return None
-        except Exception as e:
-            logger.error(f"Request parsing error: {str(e)}")
-            self._send_json_response({'error': f'Request parsing failed: {str(e)}'}, 400)
-            return None
-    
-    def _extract_image_bytes(self, data: Dict[str, Any]) -> bytes:
-        """Extract and validate image bytes from request data"""
-        image_data = data.get('image')
-        if not image_data:
-            self._send_json_response({'error': 'Image data is required'}, 400)
-            return None
-        
-        try:
-            # Handle data URL format
-            if image_data.startswith('data:image'):
-                image_data = image_data.split(',')[1]
-            
-            image_bytes = base64.b64decode(image_data)
-            logger.info(f"Image decoded: {len(image_bytes)} bytes")
-            return image_bytes
-            
-        except Exception as e:
-            logger.error(f"Image decoding error: {str(e)}")
-            self._send_json_response({'error': f'Invalid image data: {str(e)}'}, 400)
-            return None
-    
-    def _send_json_response(self, data: Dict[str, Any], status_code: int = 200):
-        """Send JSON response with proper headers"""
-        self.send_response(status_code)
-        self._send_cors_headers()
-        self.send_header('Content-Type', 'application/json')
-        self.end_headers()
-        
-        response_json = json.dumps(data, indent=2, default=str)
-        self.wfile.write(response_json.encode())
-        
-        logger.info(f"Response sent: {status_code} ({len(response_json)} bytes)")
-    
-    def _send_cors_headers(self):
-        """Send CORS headers"""
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-    
-    def _serve_web_interface(self):
-        """Serve the web interface"""
-        html_content = """<!DOCTYPE html>
+# ============================================================================
+# WEB INTERFACE HTML
+# ============================================================================
+
+def get_web_interface_html() -> str:
+    """Return the complete web interface HTML"""
+    return """
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Braille Detection System v2.0</title>
+    <title>Braille Recognition System</title>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; margin: 0; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; min-height: 100vh; }
-        .container { max-width: 1000px; margin: 0 auto; }
-        .header { text-align: center; margin-bottom: 30px; }
-        .header h1 { font-size: 2.5em; margin: 0; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); }
-        .header p { font-size: 1.2em; opacity: 0.9; }
-        .card { background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); border-radius: 15px; padding: 25px; margin: 20px 0; border: 1px solid rgba(255,255,255,0.2); }
-        .btn { background: linear-gradient(45deg, #ff6b6b, #ee5522); color: white; padding: 12px 24px; border: none; border-radius: 25px; cursor: pointer; margin: 8px; font-size: 16px; transition: all 0.3s ease; }
-        .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-        .btn-secondary { background: linear-gradient(45deg, #4ecdc4, #44a08d); }
-        .btn-info { background: linear-gradient(45deg, #667eea, #764ba2); }
-        .result-card { background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.3); border-radius: 10px; padding: 20px; margin: 15px 0; }
-        .success { border-left: 4px solid #4ecdc4; }
-        .error { border-left: 4px solid #ff6b6b; }
-        .status-indicator { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }
-        .status-ok { background: #4ecdc4; }
-        .status-error { background: #ff6b6b; }
-        .status-warning { background: #feca57; }
-        input[type="file"] { background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.3); padding: 10px; border-radius: 8px; width: 100%; }
-        .image-preview { max-width: 300px; max-height: 200px; border-radius: 8px; margin: 10px 0; }
-        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }
-        .stat-item { text-align: center; background: rgba(255,255,255,0.1); padding: 15px; border-radius: 10px; }
-        .stat-number { font-size: 2em; font-weight: bold; margin-bottom: 5px; }
-        .hidden { display: none; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            padding: 40px;
+            max-width: 800px;
+            width: 100%;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        .header h1 {
+            color: #333;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #666;
+            font-size: 1.1em;
+        }
+        
+        .upload-section {
+            border: 2px dashed #ccc;
+            border-radius: 15px;
+            padding: 40px;
+            text-align: center;
+            margin-bottom: 30px;
+            transition: all 0.3s ease;
+        }
+        
+        .upload-section:hover {
+            border-color: #667eea;
+            background: #f8f9ff;
+        }
+        
+        .upload-section.dragover {
+            border-color: #667eea;
+            background: #f0f2ff;
+        }
+        
+        .file-input {
+            display: none;
+        }
+        
+        .upload-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+        
+        .upload-btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            font-weight: bold;
+        }
+        
+        .status.loading {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .results {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 15px;
+        }
+        
+        .result-section {
+            margin-bottom: 20px;
+        }
+        
+        .result-section h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .detected-text {
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+            margin-bottom: 15px;
+        }
+        
+        .explanation {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 10px;
+            border-left: 4px solid #2196f3;
+        }
+        
+        .confidence {
+            display: inline-block;
+            padding: 5px 10px;
+            background: #4caf50;
+            color: white;
+            border-radius: 20px;
+            font-size: 0.9em;
+            margin-top: 10px;
+        }
+        
+        .preview {
+            max-width: 100%;
+            max-height: 300px;
+            border-radius: 10px;
+            margin: 15px 0;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .chat-section {
+            margin-top: 30px;
+            border-top: 1px solid #eee;
+            padding-top: 30px;
+        }
+        
+        .chat-input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            font-size: 1em;
+            margin-bottom: 15px;
+        }
+        
+        .chat-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 1em;
+        }
+        
+        .chat-response {
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 15px;
+            border-left: 4px solid #28a745;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔍 Braille Detection System</h1>
-            <p>Advanced MVC Architecture • Version
+            <h1>🔤 Braille Recognition</h1>
+            <p>Upload an image containing braille text for recognition and processing</p>
+        </div>
+        
+        <div class="upload-section" id="uploadSection">
+            <p>📁 Drag and drop an image here or</p>
+            <br>
+            <button class="upload-btn" onclick="document.getElementById('fileInput').click()">
+                Choose File
+            </button>
+            <input type="file" id="fileInput" class="file-input" accept="image/*" onchange="handleFile(event)">
+        </div>
+        
+        <div id="status" class="status hidden"></div>
+        
+        <div id="preview" class="hidden">
+            <img id="previewImage" class="preview" alt="Preview">
+        </div>
+        
+        <div id="results" class="results hidden">
+            <div class="result-section">
+                <h3>🔤 Detected Text</h3>
+                <div id="detectedText" class="detected-text"></div>
+            </div>
+            
+            <div class="result-section">
+                <h3>💡 Explanation</h3>
+                <div id="explanation" class="explanation"></div>
+                <div id="confidence" class="confidence"></div>
+            </div>
+        </div>
+        
+        <div class="chat-section">
+            <h3>💬 Ask Questions</h3>
+            <input type="text" id="chatInput" class="chat-input" placeholder="Ask about the detected text or braille in general...">
+            <button class="chat-btn" onclick="sendChat()">Send</button>
+            <div id="chatResponse" class="chat-response hidden"></div>
+        </div>
+    </div>
+
+    <script>
+        let detectedContext = null;
+
+        // File handling
+        function handleFile(event) {
+            const file = event.target.files[0];
+            if (file) {
+                processFile(file);
+            }
+        }
+
+        // Drag and drop
+        const uploadSection = document.getElementById('uploadSection');
+        
+        uploadSection.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadSection.classList.add('dragover');
+        });
+        
+        uploadSection.addEventListener('dragleave', () => {
+            uploadSection.classList.remove('dragover');
+        });
+        
+        uploadSection.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadSection.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                processFile(files[0]);
+            }
+        });
+
+        function processFile(file) {
+            if (!file.type.startsWith('image/')) {
+                showStatus('Please select an image file', 'error');
+                return;
+            }
+
+            // Show preview
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                document.getElementById('previewImage').src = e.target.result;
+                document.getElementById('preview').classList.remove('hidden');
+            };
+            reader.readAsDataURL(file);
+
+            // Process image
+            showStatus('Processing image...', 'loading');
+            
+            const formData = new FormData();
+            formData.append('image', file);
+
+            fetch('/api/detect-and-process', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    displayResults(data);
+                    detectedContext = { detected_text: data.detected_text };
+                    showStatus('Processing complete!', 'success');
+                } else {
+                    showStatus('Processing failed: ' + (data.error || 'Unknown error'), 'error');
+                }
+            })
+            .catch(error => {
+                showStatus('Error: ' + error.message, 'error');
+            });
+        }
+
+        function displayResults(data) {
+            document.getElementById('detectedText').textContent = data.detected_text || 'No text detected';
+            document.getElementById('explanation').textContent = data.explanation || 'No explanation available';
+            document.getElementById('confidence').textContent = `Confidence: ${Math.round(data.confidence * 100)}%`;
+            document.getElementById('results').classList.remove('hidden');
+        }
+
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
+            status.classList.remove('hidden');
+            
+            if (type === 'success') {
+                setTimeout(() => {
+                    status.classList.add('hidden');
+                }, 3000);
+            }

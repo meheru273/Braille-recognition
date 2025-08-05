@@ -136,3 +136,185 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             text-align: center;
             margin-bottom: 30px;
             transition: all 0.3s ease;
+        }
+        .upload-section:hover {
+            border-color: #667eea;
+            background: #f8f9ff;
+        }
+        .upload-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+        .upload-btn:hover {
+            transform: translateY(-2px);
+        }
+        .file-input { display: none; }
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            font-weight: bold;
+        }
+        .status.loading { background: #fff3cd; color: #856404; }
+        .status.success { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .results {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 15px;
+        }
+        .detected-text {
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+            margin-bottom: 15px;
+            font-family: monospace;
+            font-size: 1.2em;
+        }
+        .explanation {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 10px;
+            border-left: 4px solid #2196f3;
+        }
+        .hidden { display: none; }
+        .preview {
+            max-width: 100%;
+            max-height: 300px;
+            border-radius: 10px;
+            margin: 15px 0;
+        }
+        .stats {
+            background: #f1f3f4;
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 10px;
+            font-size: 0.9em;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔤 Braille Recognition</h1>
+            <p>Upload an image containing braille text for recognition</p>
+        </div>
+        
+        <div class="upload-section">
+            <p>📁 Drop an image here or click to browse</p>
+            <br>
+            <button class="upload-btn" onclick="document.getElementById('fileInput').click()">
+                Choose File
+            </button>
+            <input type="file" id="fileInput" class="file-input" accept="image/*" onchange="handleFile(event)">
+        </div>
+        
+        <div id="status" class="status hidden"></div>
+        <div id="preview" class="hidden">
+            <img id="previewImage" class="preview" alt="Preview">
+        </div>
+        <div id="results" class="results hidden">
+            <div>
+                <h3>🔤 Detected Text</h3>
+                <div id="detectedText" class="detected-text"></div>
+            </div>
+            <div>
+                <h3>💡 Explanation</h3>
+                <div id="explanation" class="explanation"></div>
+            </div>
+            <div id="stats" class="stats"></div>
+        </div>
+    </div>
+
+    <script>
+        function handleFile(event) {
+            const file = event.target.files[0];
+            if (file && file.type.startsWith('image/')) {
+                processFile(file);
+            } else {
+                showStatus('Please select an image file', 'error');
+            }
+        }
+
+        function processFile(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                document.getElementById('previewImage').src = e.target.result;
+                document.getElementById('preview').classList.remove('hidden');
+            };
+            reader.readAsDataURL(file);
+
+            showStatus('Processing image...', 'loading');
+            
+            const formData = new FormData();
+            formData.append('image', file);
+
+            // Try the current path first, then fallback to /api
+            fetch(window.location.pathname, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    displayResults(data);
+                    showStatus('Processing complete!', 'success');
+                } else {
+                    showStatus('Error: ' + (data.error || 'Unknown error'), 'error');
+                }
+            })
+            .catch(error => {
+                showStatus('Network error: ' + error.message, 'error');
+            });
+        }
+
+        function displayResults(data) {
+            document.getElementById('detectedText').textContent = data.detected_text || 'No text detected';
+            document.getElementById('explanation').textContent = data.explanation || 'No explanation available';
+            
+            const stats = `Detected ${data.detection_count} characters • Confidence: ${(data.confidence * 100).toFixed(1)}% • Processing time: ${data.total_time_ms}ms`;
+            document.getElementById('stats').textContent = stats;
+            
+            document.getElementById('results').classList.remove('hidden');
+        }
+
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
+            status.classList.remove('hidden');
+            
+            if (type === 'success') {
+                setTimeout(() => status.classList.add('hidden'), 3000);
+            }
+        }
+
+        const uploadSection = document.querySelector('.upload-section');
+        uploadSection.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadSection.style.borderColor = '#667eea';
+        });
+        uploadSection.addEventListener('dragleave', () => {
+            uploadSection.style.borderColor = '#ccc';
+        });
+        uploadSection.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadSection.style.borderColor = '#ccc';
+            const files = e.dataTransfer.files;
+            if (files.length > 0 && files[0].type.startsWith('image/')) {
+                processFile(files[0]);
+            }
+        });
+    </script>
+</body>
+</html>'''

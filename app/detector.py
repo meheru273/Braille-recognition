@@ -133,3 +133,4 @@ class BrailleDetector:
         except Exception as e:
             print(f"Error creating annotated image: {e}")
             return False
+        

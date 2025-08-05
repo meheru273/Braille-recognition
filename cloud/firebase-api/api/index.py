@@ -18,7 +18,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import Firebase service
 try:
-    from firebase_service import firebase_service, BrailleDetectionResult
+    from cloud.firebaseservice import firebase_service, BrailleDetectionResult
 except ImportError as e:
     print(f"Import error: {e}")
     print("Make sure firebase_service.py is in the same directory")

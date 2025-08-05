@@ -4,7 +4,7 @@ import requests
 app = Flask(__name__)
 
 INFERENCE_API_URL = "https://serverless.roboflow.com"
-API_KEY = "RzOXFbriJONcee7MHKN8"
+API_KEY = os.getenv("ROBOFLOW_API_KEY")
 WORKSPACE_NAME = "braille-to-text-0xo2p"
 WORKFLOW_ID = "custom-workflow"
 

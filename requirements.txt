@@ -1,0 +1,12 @@
+gradio
+fastapi
+uvicorn[standard]
+pydantic
+Pillow
+inference-sdk
+langchain
+langchain-community
+langchain-openai
+langgraph
+python-dotenv
+wikipedia

@@ -1,3 +1,16 @@
+---
+title: Braille Detection API
+emoji: 🔤
+colorFrom: blue
+colorTo: purple
+sdk: gradio
+sdk_version: "4.7.1"
+app_file: app.py
+python_version: "3.11"
+pinned: false
+license: mit
+---
+
 # Braille Recognition System
 
 A complete end-to-end system for detecting braille characters in images, interpreting them with AI, and providing an interactive chat interface. Supports both local development and cloud deployment on Vercel with Firebase integration.

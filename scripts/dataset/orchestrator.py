@@ -36,12 +36,22 @@ def step_visualize(datasets):
     annotator.visualize()
 
 
+def step_verify(datasets):
+    annotator.verify_angelina()
+
+
+def step_stats(datasets):
+    annotator.stats()
+
+
 # ordered registry - extend here for future phases
 STEPS = {
     "download": step_download,
     "inspect": step_inspect,
+    "verify": step_verify,
     "annotate": step_annotate,
     "visualize": step_visualize,
+    "stats": step_stats,
 }
 DEFAULT_PIPELINE = ["download", "annotate"]
 

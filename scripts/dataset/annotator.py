@@ -130,12 +130,33 @@ def inspect(name: str, max_lines: int = 18) -> None:
 #           "к"), which would need a Russian-braille char table to decode.
 # We use the CSV: its integer label IS our class id -> unambiguous. Verified: CSV line 1
 # label 5 == JSON shape 1 char "k"(cyrillic) == dots 1,3 == class 5.
+def _angelina_frame_size(image_path: Path):
+    """The coordinate frame the CSV's normalized coords refer to.
+
+    The paired LabelMe JSON records imageWidth/imageHeight, which is AUTHORITATIVE:
+    some photos carry an EXIF rotation flag, so PIL's raw pixel size is transposed
+    relative to the frame the annotations were drawn in. Using the raw size there
+    collapses every box into a corner. Returns (w, h, exif_rotated: bool).
+    """
+    raw_w, raw_h = _image_size(image_path)
+    js = image_path.with_suffix(".json")
+    if js.exists():
+        try:
+            data = json.loads(js.read_text(encoding="utf-8", errors="replace"))
+            jw, jh = data.get("imageWidth"), data.get("imageHeight")
+            if jw and jh:
+                return int(jw), int(jh), (int(jw), int(jh)) != (raw_w, raw_h)
+        except Exception:  # noqa: BLE001
+            pass
+    return raw_w, raw_h, False
+
+
 def parse_angelina_item(image_path: Path):
     """(w, h, [(class_id, [x,y,w,h]), ...]) for one Angelina image, or None."""
     csv = image_path.with_suffix(".csv")
     if not csv.exists():
         return None
-    w, h = _image_size(image_path)
+    w, h, _ = _angelina_frame_size(image_path)
     boxes, bad = [], []
     for line in csv.read_text(encoding="utf-8", errors="replace").splitlines():
         parts = line.strip().replace(";", ",").split(",")
@@ -214,6 +235,87 @@ def parse_dsbi_item(image_path: Path):
 PARSERS = {"angelina": parse_angelina_item, "dsbi": parse_dsbi_item}
 
 
+def _copy_image_in_frame(src: Path, dst: Path, w: int, h: int) -> None:
+    """Copy the image so its PIXELS match the annotation frame (w, h).
+
+    If the file carries an EXIF rotation, raw pixels are transposed vs the frame the
+    boxes were drawn in; we bake the rotation in so image and annotations agree.
+    """
+    raw_w, raw_h = _image_size(src)
+    if (raw_w, raw_h) == (w, h):
+        shutil.copy2(src, dst)
+        return
+    from PIL import ImageOps
+    with Image.open(src) as im:
+        fixed = ImageOps.exif_transpose(im)
+        if fixed.size != (w, h):        # EXIF didn't explain it - resize to the frame
+            fixed = fixed.resize((w, h), Image.Resampling.LANCZOS)
+        fixed.convert("RGB").save(dst, format="JPEG", quality=95)
+
+
+# --------------------------------------------------------------------------------------
+# Verify - cross-check Angelina CSV boxes against the paired LabelMe JSON boxes
+# --------------------------------------------------------------------------------------
+def verify_angelina(tol_px: float = 2.0, show_worst: int = 10) -> None:
+    """Angelina ships BOTH a CSV (normalized) and a JSON (absolute px) for each image.
+    They should describe the SAME boxes, so comparing them proves whether our
+    normalized->pixel conversion is right, independently of any visual guesswork.
+    """
+    root = Path(config.DATASETS["angelina"]["dir"])
+    if not root.exists():
+        print("angelina not downloaded.")
+        return
+    n_img = n_ok = n_rot = n_count_mismatch = 0
+    worst = []
+    for img_path in _iter_images(root):
+        csvp, jsp = img_path.with_suffix(".csv"), img_path.with_suffix(".json")
+        if not (csvp.exists() and jsp.exists()):
+            continue
+        w, h, rotated = _angelina_frame_size(img_path)
+        n_img += 1
+        n_rot += bool(rotated)
+        try:
+            shapes = json.loads(jsp.read_text(encoding="utf-8", errors="replace")).get("shapes", [])
+        except Exception:  # noqa: BLE001
+            continue
+        rows = [ln for ln in csvp.read_text(encoding="utf-8", errors="replace").splitlines()
+                if ln.strip()]
+        if len(rows) != len(shapes):
+            n_count_mismatch += 1
+        max_diff = 0.0
+        for row, shape in zip(rows, shapes):
+            parts = row.strip().replace(";", ",").split(",")
+            pts = shape.get("points", [])
+            if len(parts) < 5 or len(pts) < 2:
+                continue
+            try:
+                l, t, r, b = (float(v) for v in parts[:4])
+            except ValueError:
+                continue
+            csv_px = (l * w, t * h, r * w, b * h)
+            xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+            js_px = (min(xs), min(ys), max(xs), max(ys))
+            max_diff = max(max_diff, max(abs(a - b) for a, b in zip(csv_px, js_px)))
+        if max_diff <= tol_px:
+            n_ok += 1
+        else:
+            worst.append((max_diff, img_path.name, len(rows), len(shapes), rotated, (w, h)))
+
+    print(f"\n=== Angelina CSV-vs-JSON geometry check ({n_img} images) ===")
+    print(f"  agree within {tol_px}px : {n_ok}/{n_img}")
+    print(f"  EXIF-rotated frames    : {n_rot}  (JSON dims != raw pixel dims)")
+    print(f"  CSV/JSON count differs : {n_count_mismatch}")
+    if worst:
+        worst.sort(reverse=True)
+        print(f"  worst {min(show_worst, len(worst))} mismatches (px, image, #csv, #json, rotated, frame):")
+        for d, nm, nc, nj, rot, fr in worst[:show_worst]:
+            print(f"    {d:9.1f}  {nm}  csv={nc} json={nj} rotated={rot} frame={fr}")
+    else:
+        print("  -> all images agree: the normalized->pixel conversion is correct.")
+    print("  NOTE: pages that look under-annotated but pass this check are incomplete "
+          "in the SOURCE dataset, not a parser bug.\n")
+
+
 # --------------------------------------------------------------------------------------
 # Build unified COCO
 # --------------------------------------------------------------------------------------
@@ -245,7 +347,7 @@ def build(datasets=None, out_dir: Path = None, copy_images: bool = True) -> Path
                 continue
             file_name = f"{name}__{img_path.name}"
             if copy_images:
-                shutil.copy2(img_path, img_out / file_name)
+                _copy_image_in_frame(img_path, img_out / file_name, w, h)
             img_id = builder.add_image(w, h, file_name, source=name)
             for cid, xywh in boxes:
                 builder.add_box(img_id, cid, xywh)
@@ -300,6 +402,38 @@ def visualize(coco_dir: Path = None, n: int = 8) -> None:
         img.save(out / meta["file_name"])
     print(f"Wrote up to {n} visualized images to {out}\n"
           f"-> open them and confirm boxes sit on the braille cells.")
+
+
+def stats(coco_dir: Path = None, thin: int = 30) -> None:
+    """Per-source box counts + the sparsest pages, so 'looks under-annotated' can be
+    checked numerically instead of by eye."""
+    coco_dir = Path(coco_dir or config.COCO_DIR)
+    ann_path = coco_dir / "_annotations.coco.json"
+    if not ann_path.exists():
+        print("No COCO file - run the annotate step first.")
+        return
+    coco = json.loads(ann_path.read_text(encoding="utf-8"))
+    per_img = {}
+    for a in coco["annotations"]:
+        per_img[a["image_id"]] = per_img.get(a["image_id"], 0) + 1
+    by_src = {}
+    for im in coco["images"]:
+        n = per_img.get(im["id"], 0)
+        by_src.setdefault(im.get("source", "?"), []).append((n, im["file_name"]))
+    print(f"\n=== Dataset stats ({len(coco['images'])} images, {len(coco['annotations'])} boxes) ===")
+    for src, items in sorted(by_src.items()):
+        counts = sorted(n for n, _ in items)
+        tot = sum(counts)
+        mid = counts[len(counts) // 2] if counts else 0
+        print(f"  {src}: {len(items)} images, {tot} boxes, median {mid}/image, "
+              f"min {counts[0] if counts else 0}, max {counts[-1] if counts else 0}")
+        sparse = sorted(i for i in items if i[0] < thin)[:8]
+        if sparse:
+            print(f"    pages with <{thin} boxes ({sum(1 for i in items if i[0] < thin)} total):")
+            for n, fn in sparse:
+                print(f"      {n:>4}  {fn}")
+    used = {c for c in (a["category_id"] for a in coco["annotations"])}
+    print(f"  classes present: {len(used)}/63\n")
 
 
 def main(datasets=None) -> None:

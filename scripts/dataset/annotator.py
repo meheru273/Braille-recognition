@@ -319,7 +319,15 @@ def verify_angelina(tol_px: float = 2.0, show_worst: int = 10) -> None:
 # --------------------------------------------------------------------------------------
 # Build unified COCO
 # --------------------------------------------------------------------------------------
-def build(datasets=None, out_dir: Path = None, copy_images: bool = True) -> Path:
+def build(datasets=None, out_dir: Path = None, copy_images: bool = True,
+          include_negatives: bool = True) -> Path:
+    """Build the unified COCO dataset.
+
+    include_negatives: keep images that legitimately have zero boxes (Angelina's
+    `not_braille` photos). They are valuable HARD NEGATIVES - they teach the model
+    not to fire on non-braille pages, cutting false positives. COCO allows images
+    with no annotations, and RF-DETR/YOLO both train on them fine.
+    """
     datasets = datasets or list(config.DATASETS)
     out_dir = Path(out_dir or config.COCO_DIR)
     img_out = out_dir / "images"
@@ -332,7 +340,7 @@ def build(datasets=None, out_dir: Path = None, copy_images: bool = True) -> Path
         if not root.exists():
             print(f"[{name}] not downloaded - skipping")
             continue
-        n_img = n_box = n_skip = 0
+        n_img = n_box = n_neg = 0
         for img_path in _iter_images(root):
             try:
                 parsed = parser(img_path)
@@ -343,8 +351,9 @@ def build(datasets=None, out_dir: Path = None, copy_images: bool = True) -> Path
                 continue
             w, h, boxes = parsed
             if not boxes:
-                n_skip += 1
-                continue
+                n_neg += 1
+                if not include_negatives:
+                    continue
             file_name = f"{name}__{img_path.name}"
             if copy_images:
                 _copy_image_in_frame(img_path, img_out / file_name, w, h)
@@ -353,7 +362,8 @@ def build(datasets=None, out_dir: Path = None, copy_images: bool = True) -> Path
                 builder.add_box(img_id, cid, xywh)
                 n_box += 1
             n_img += 1
-        print(f"[{name}] {n_img} images, {n_box} boxes, {n_skip} images without boxes")
+        kept = "kept as hard negatives" if include_negatives else "dropped"
+        print(f"[{name}] {n_img} images, {n_box} boxes, {n_neg} without boxes ({kept})")
 
     ann_path = out_dir / "_annotations.coco.json"
     ann_path.write_text(json.dumps(builder.to_coco()), encoding="utf-8")
@@ -384,9 +394,14 @@ def visualize(coco_dir: Path = None, n: int = 8) -> None:
         by_img.setdefault(a["image_id"], []).append(a)
     label = {c["id"]: (c.get("letter") or c["name"]) for c in coco["categories"]}
     out = coco_dir / "_viz"
+    if out.exists():
+        for stale in out.iterdir():          # never leave results from a previous run
+            if stale.is_file():
+                stale.unlink()
     out.mkdir(exist_ok=True)
     ids = list(imgs)
     step = max(1, len(ids) // max(1, n))
+    written = []
     for iid in ids[::step][:n]:
         meta = imgs[iid]
         p = coco_dir / "images" / meta["file_name"]
@@ -394,14 +409,19 @@ def visualize(coco_dir: Path = None, n: int = 8) -> None:
             continue
         img = Image.open(p).convert("RGB")
         draw = ImageDraw.Draw(img)
-        for a in by_img.get(iid, []):
+        anns = by_img.get(iid, [])
+        for a in anns:
             x, y, bw, bh = a["bbox"]
             draw.rectangle([x, y, x + bw, y + bh], outline=(255, 0, 0), width=2)
             draw.text((x + 1, max(0, y - 10)), str(label.get(a["category_id"], "?")),
                       fill=(255, 255, 0))
+        draw.text((6, 6), f"{meta['file_name']}  |  {len(anns)} boxes", fill=(255, 0, 0))
         img.save(out / meta["file_name"])
-    print(f"Wrote up to {n} visualized images to {out}\n"
-          f"-> open them and confirm boxes sit on the braille cells.")
+        written.append((len(anns), meta["file_name"]))
+    print(f"Wrote {len(written)} visualized images to {out} (stale files cleared)")
+    for cnt, fn in written:
+        print(f"   {cnt:>5} boxes  {fn}")
+    print("-> each image is captioned with its box count; compare that to what you see.")
 
 
 def stats(coco_dir: Path = None, thin: int = 30) -> None:
@@ -433,7 +453,9 @@ def stats(coco_dir: Path = None, thin: int = 30) -> None:
             for n, fn in sparse:
                 print(f"      {n:>4}  {fn}")
     used = {c for c in (a["category_id"] for a in coco["annotations"])}
-    print(f"  classes present: {len(used)}/63\n")
+    n_neg = sum(1 for im in coco["images"] if per_img.get(im["id"], 0) == 0)
+    print(f"  classes present: {len(used)}/63")
+    print(f"  hard negatives (0 boxes): {n_neg}\n")
 
 
 def main(datasets=None) -> None:

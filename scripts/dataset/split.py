@@ -30,17 +30,29 @@ from common import config  # noqa: E402
 DATASET_DIR = config.DATA_DIR / "dataset"
 
 
-def _group_of(im: dict) -> str:
+def _group_of(im: dict, negative_ids=frozenset()) -> str:
     # 'group' exists in COCO built after the group-metadata change; fall back to a
     # name-derived group so older _annotations.coco.json files still split safely.
-    g = im.get("group")
-    if g:
-        return g
-    return im["file_name"].split("__")[0]
+    g = im.get("group") or im["file_name"].split("__")[0]
+    # Hard negatives (e.g. angelina/not_braille/misc) are UNRELATED photos, not pages
+    # of one document - there is no shared-source leakage between them. Treating the
+    # folder as one group would dump all negatives into a single split (seed 0 put all
+    # 44 in test), so each negative image is its own group and they spread naturally.
+    if im["id"] in negative_ids:
+        return f"{g}/{im['file_name']}"
+    return g
+
+
+# Default seed chosen by a constrained search over seeds 0-39 (see git history):
+# it is the seed whose grouped split best satisfies (a) both sources (angelina+dsbi)
+# present in valid AND test, (b) negatives present in every split (31/6/7), and
+# (c) test share of boxes closest to 15% (exactly 0.15). Seed 0 - the naive choice -
+# put ALL 44 negatives in test and zero DSBI outside train.
+DEFAULT_SEED = 8
 
 
 def split(coco_dir: Path = None, out_dir: Path = None, test_size: float = 0.15,
-          valid_size: float = 0.15, seed: int = 0) -> None:
+          valid_size: float = 0.15, seed: int = DEFAULT_SEED) -> None:
     from sklearn.model_selection import GroupShuffleSplit
 
     coco_dir = Path(coco_dir or config.COCO_DIR)
@@ -48,7 +60,9 @@ def split(coco_dir: Path = None, out_dir: Path = None, test_size: float = 0.15,
     coco = json.loads((coco_dir / "_annotations.coco.json").read_text(encoding="utf-8"))
 
     images = coco["images"]
-    groups = [_group_of(im) for im in images]
+    with_boxes = {a["image_id"] for a in coco["annotations"]}
+    negative_ids = frozenset(im["id"] for im in images if im["id"] not in with_boxes)
+    groups = [_group_of(im, negative_ids) for im in images]
     idx = list(range(len(images)))
 
     # 1st cut: test off the rest; 2nd cut: valid off the remainder
@@ -89,7 +103,7 @@ def split(coco_dir: Path = None, out_dir: Path = None, test_size: float = 0.15,
                "categories": coco["categories"]}
         (sub_dir / "_annotations.coco.json").write_text(json.dumps(sub), encoding="utf-8")
         stats[name] = (len(sub_imgs), len(sub_anns),
-                       sorted({_group_of(im) for im in sub_imgs}))
+                       sorted({_group_of(im, negative_ids) for im in sub_imgs}))
 
     # ship the exact split with the dataset for reproducibility
     (out_dir / "splits.json").write_text(json.dumps(
@@ -99,9 +113,16 @@ def split(coco_dir: Path = None, out_dir: Path = None, test_size: float = 0.15,
 
     print(f"\n=== Split by GROUP (seed={seed}) -> {out_dir} ===")
     for name, (ni, na, grps) in stats.items():
-        print(f"  {name:5}: {ni:3d} images, {na:6d} boxes, {len(grps):2d} groups")
-        for g in grps:
+        sub_imgs = [im for im in images if assign[im["id"]] == name]
+        n_neg = sum(1 for im in sub_imgs if im["id"] in negative_ids)
+        srcs = sorted({im.get("source", "?") for im in sub_imgs})
+        print(f"  {name:5}: {ni:3d} images ({n_neg} neg), {na:6d} boxes, "
+              f"{len(grps):2d} groups, sources={srcs}")
+        for g in sorted({gr for gr in grps if "not_braille" not in gr}):
             print(f"         - {g}")
+        n_neg_groups = sum(1 for gr in grps if "not_braille" in gr)
+        if n_neg_groups:
+            print(f"         - ({n_neg_groups} individual not_braille negatives)")
     # sanity: no group in two splits
     seen = {}
     for name, (_, _, grps) in stats.items():
@@ -118,6 +139,8 @@ if __name__ == "__main__":
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--test-size", type=float, default=0.15)
     ap.add_argument("--valid-size", type=float, default=0.15)
-    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--seed", type=int, default=None,
+                    help=f"group-shuffle seed (default {DEFAULT_SEED}, see comment)")
     a = ap.parse_args()
-    split(a.coco_dir, a.out_dir, a.test_size, a.valid_size, a.seed)
+    split(a.coco_dir, a.out_dir, a.test_size, a.valid_size,
+          DEFAULT_SEED if a.seed is None else a.seed)

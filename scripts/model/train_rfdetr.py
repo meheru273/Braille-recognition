@@ -48,11 +48,23 @@ def main() -> None:
     ap.add_argument("--wandb", action="store_true")
     a = ap.parse_args()
 
+    import json
     ds = Path(a.dataset_dir)
+    print("dataset sanity check:")
     for split_name in ("train", "valid", "test"):
-        if not (ds / split_name / "_annotations.coco.json").exists():
-            raise SystemExit(f"missing {ds / split_name / '_annotations.coco.json'} - "
-                             "run scripts/dataset/split.py first")
+        ann = ds / split_name / "_annotations.coco.json"
+        if not ann.exists():
+            raise SystemExit(f"missing {ann} - run scripts/dataset/split.py first")
+        d = json.loads(ann.read_text(encoding="utf-8"))
+        n_img, n_ann = len(d["images"]), len(d["annotations"])
+        srcs = sorted({im.get("source", "?") for im in d["images"]})
+        print(f"  {split_name:5}: {n_img:3d} images, {n_ann:6d} boxes, sources={srcs}")
+        # Guard against training on a stale/degenerate split (e.g. the old seed-0 run
+        # wrote valid/test containing ONLY negative images before its assert fired).
+        if n_ann == 0:
+            raise SystemExit(
+                f"{split_name} has 0 annotations - this is a stale/broken split. "
+                "Re-run: python scripts/dataset/orchestrator.py --steps annotate,split")
     if a.resolution and a.resolution % 56:
         raise SystemExit(f"--resolution must be divisible by 56 (got {a.resolution})")
 

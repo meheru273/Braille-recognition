@@ -1,0 +1,30 @@
+# Research/training deps for the scripts/ pipeline.
+# SEPARATE from the HF Space's root requirements.txt (do not merge — would bloat the Space).
+# Copy scripts/ to the remote GPU and `pip install -r scripts/requirements.txt` there.
+# Pin exact versions once your env works (esp. rfdetr + supervision — their APIs move).
+
+# --- Phase 1: dataset build ---
+Pillow                    # image sizes in the annotator
+# (git is required for the downloader; it is a system tool, not a pip dep)
+
+# --- Phase 2: enhance + crop + pre-annotate our own photos ---
+opencv-python             # illumination normalization + OpenCV 4-point crop fallback
+numpy
+docaligner-docsaid        # deep 4-corner page detector (Apache-2.0)
+supervision               # detections -> COCO/YOLO, drawing, metrics
+roboflow                  # existing hosted model (backend A for pre-annotation)
+# inference-sdk           # alt Roboflow client (already used by the Space's detector.py)
+fiftyone                  # triage/QA of pre-labels; round-trip to CVAT
+
+# --- Phase 3: splits ---
+scikit-learn              # GroupShuffleSplit / StratifiedGroupKFold (split by PAGE)
+
+# --- Phase 4: training (needs CUDA GPU, Python >= 3.10) ---
+rfdetr                    # extras when needed: rfdetr[onnx], rfdetr[loggers]  (NOT rfdetr[metrics])
+ultralytics               # YOLO v11/v12 same-data baseline
+
+# --- Phase 5: evaluation ---
+pycocotools               # final reported COCO mAP (raise maxDets for dense pages)
+torchmetrics              # install torchmetrics[detection]; per-epoch val mAP
+jiwer                     # CER/WER end-to-end reading eval
+# liblouis: install the system library + python bindings separately (braille back-translation)

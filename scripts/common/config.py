@@ -17,6 +17,19 @@ DATA_DIR = Path(os.environ.get("BRAILLE_DATA_DIR", SCRIPTS_DIR / "data")).resolv
 RAW_DIR = DATA_DIR / "raw"          # cloned source datasets
 COCO_DIR = DATA_DIR / "coco"        # unified COCO output (Phase 1)
 
+# Phase 2 - our own contributed photos
+CONTRIB_DIR = DATA_DIR / "contrib"
+CONTRIB_ENHANCED = CONTRIB_DIR / "enhanced"
+CONTRIB_CROPPED = CONTRIB_DIR / "cropped"
+CONTRIB_PRELABEL = CONTRIB_DIR / "prelabel"
+CONTRIB_PREVIEW = CONTRIB_DIR / "preview"
+
+# Our DSLR photos are ~24MP with braille cells ~85px wide, while the base datasets
+# (Angelina) have cells ~28px. Detectors are scale-sensitive, so cropped pages are
+# resized so a cell lands near this width - matching the training distribution.
+TARGET_CELL_PX = 28
+APPROX_SOURCE_CELL_PX = 85          # measured on the DSC*.jpg set; re-measure if the rig changes
+
 # Base datasets (Phase 1). See RESEARCH_PLAN.md.
 #  - angelina: page photos, per-character boxes, 1-63 six-dot labels (Ovodov, ICCVW 2021)
 #  - dsbi:     114 double-sided images, per-cell recto/verso dot-state labels

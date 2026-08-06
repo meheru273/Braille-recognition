@@ -44,6 +44,20 @@ def step_stats(datasets):
     annotator.stats()
 
 
+# --- Phase 2: our own contributed photos (set --input) -------------------------------
+def step_enhance(datasets, input_dir=None, preview=0):
+    from annotate import enhance
+    if not input_dir:
+        raise SystemExit("enhance needs --input <folder of raw photos>")
+    enhance.run(Path(input_dir), preview=preview)
+
+
+def step_crop(datasets, input_dir=None, preview=0):
+    from annotate import crop_page
+    src = input_dir or config.CONTRIB_ENHANCED
+    crop_page.run(Path(src), preview=preview)
+
+
 # ordered registry - extend here for future phases
 STEPS = {
     "download": step_download,
@@ -52,17 +66,23 @@ STEPS = {
     "annotate": step_annotate,
     "visualize": step_visualize,
     "stats": step_stats,
+    "enhance": step_enhance,
+    "crop": step_crop,
 }
 DEFAULT_PIPELINE = ["download", "annotate"]
 
 
-def run(steps, datasets=None):
+def run(steps, datasets=None, input_dir=None, preview=0):
     for name in steps:
         if name not in STEPS:
             raise SystemExit(f"Unknown step '{name}'. Available: {list(STEPS)}")
     for name in steps:
         print(f"\n########## STEP: {name} ##########")
-        STEPS[name](datasets)
+        fn = STEPS[name]
+        if name in ("enhance", "crop"):
+            fn(datasets, input_dir=input_dir, preview=preview)
+        else:
+            fn(datasets)
     print("\nPipeline complete:", " -> ".join(steps))
 
 
@@ -73,6 +93,8 @@ if __name__ == "__main__":
                     help="comma-separated, in order. Default: " + ",".join(DEFAULT_PIPELINE))
     ap.add_argument("--datasets", nargs="*", default=None,
                     help="subset of: " + " ".join(config.DATASETS))
+    ap.add_argument("--input", default=None, help="raw photo folder (enhance/crop steps)")
+    ap.add_argument("--preview", type=int, default=0, help="preview N images instead of processing all")
     ap.add_argument("--list", action="store_true", help="list steps and exit")
     args = ap.parse_args()
     if args.list:
@@ -81,4 +103,5 @@ if __name__ == "__main__":
             print("  -", s)
         print("Default pipeline:", " -> ".join(DEFAULT_PIPELINE))
         raise SystemExit(0)
-    run([s.strip() for s in args.steps.split(",") if s.strip()], args.datasets)
+    run([s.strip() for s in args.steps.split(",") if s.strip()], args.datasets,
+        input_dir=args.input, preview=args.preview)

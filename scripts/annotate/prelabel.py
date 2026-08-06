@@ -95,17 +95,19 @@ def backend_roboflow_http(conf: float):
     return run
 
 
-def backend_rfdetr(conf: float, weights: str):
-    from rfdetr import RFDETRMedium
-    model = RFDETRMedium(pretrain_weights=weights)
-    print(f"  backend: rfdetr  weights={weights}")
+def backend_rfdetr(conf: float, weights: str, size: str = "medium"):
+    import rfdetr
+    cls = {"nano": "RFDETRNano", "small": "RFDETRSmall",
+           "medium": "RFDETRMedium", "large": "RFDETRLarge"}[size]
+    model = getattr(rfdetr, cls)(pretrain_weights=weights)
+    print(f"  backend: rfdetr-{size}  weights={weights}")
 
     def run(image: np.ndarray) -> sv.Detections:
         return model.predict(image, threshold=conf)
     return run
 
 
-def make_backend(name: str, conf: float, weights: str = None):
+def make_backend(name: str, conf: float, weights: str = None, size: str = "medium"):
     if name == "roboflow-local":
         return backend_roboflow_local(conf)
     if name == "roboflow-http":
@@ -113,7 +115,7 @@ def make_backend(name: str, conf: float, weights: str = None):
     if name == "rfdetr":
         if not weights:
             raise SystemExit("--backend rfdetr needs --weights <checkpoint.pth>")
-        return backend_rfdetr(conf, weights)
+        return backend_rfdetr(conf, weights, size)
     raise SystemExit(f"unknown backend {name!r}")
 
 
@@ -163,7 +165,7 @@ def to_class_id(name) -> int:
 
 def run(input_dir: Path, backend: str = "roboflow-local", conf: float = DEFAULT_CONF,
         iou: float = DEFAULT_NMS_IOU, auto_orient: bool = False, limit: int = 0,
-        weights: str = None, out_dir: Path = None) -> None:
+        weights: str = None, out_dir: Path = None, model_size: str = "medium") -> None:
     out_dir = Path(out_dir or config.CONTRIB_PRELABEL)
     img_out, lbl_out = out_dir / "images", out_dir / "labels"
     img_out.mkdir(parents=True, exist_ok=True)
@@ -178,7 +180,7 @@ def run(input_dir: Path, backend: str = "roboflow-local", conf: float = DEFAULT_
     if not paths:
         print(f"No images in {input_dir}")
         return
-    detect_fn = make_backend(backend, conf, weights)
+    detect_fn = make_backend(backend, conf, weights, model_size)
     print(f"  {len(paths)} images | conf>={conf} nms_iou={iou} tile={TILE}")
 
     images, annotations, ann_id = [], [], 0
@@ -235,10 +237,13 @@ if __name__ == "__main__":
     ap.add_argument("--backend", default="roboflow-local",
                     choices=["roboflow-local", "roboflow-http", "rfdetr"])
     ap.add_argument("--weights", default=None, help="rfdetr checkpoint")
+    ap.add_argument("--model-size", default="medium",
+                    choices=["nano", "small", "medium", "large"])
     ap.add_argument("--conf", type=float, default=DEFAULT_CONF)
     ap.add_argument("--iou", type=float, default=DEFAULT_NMS_IOU)
     ap.add_argument("--auto-orient", action="store_true",
                     help="let the detector decide the page rotation")
     ap.add_argument("--limit", type=int, default=0)
     a = ap.parse_args()
-    run(Path(a.input), a.backend, a.conf, a.iou, a.auto_orient, a.limit, a.weights)
+    run(Path(a.input), a.backend, a.conf, a.iou, a.auto_orient, a.limit, a.weights,
+        model_size=a.model_size)

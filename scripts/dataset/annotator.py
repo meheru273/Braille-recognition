@@ -39,10 +39,15 @@ class CocoBuilder:
         self.images, self.annotations = [], []
         self._img_id = self._ann_id = 0
 
-    def add_image(self, width, height, file_name, source) -> int:
+    def add_image(self, width, height, file_name, source, group=None) -> int:
         self._img_id += 1
         self.images.append({"id": self._img_id, "width": int(width), "height": int(height),
-                            "file_name": file_name, "source": source})
+                            "file_name": file_name, "source": source,
+                            # group = source book/document folder. The split step keeps a
+                            # whole group in ONE split - pages of the same book share
+                            # paper, embossing and lighting, so splitting them across
+                            # train/test would leak (inflated mAP).
+                            "group": group or file_name})
         return self._img_id
 
     def add_box(self, image_id, class_id, xywh) -> None:
@@ -357,7 +362,11 @@ def build(datasets=None, out_dir: Path = None, copy_images: bool = True,
             file_name = f"{name}__{img_path.name}"
             if copy_images:
                 _copy_image_in_frame(img_path, img_out / file_name, w, h)
-            img_id = builder.add_image(w, h, file_name, source=name)
+            # group by the containing folder = book/document identity
+            # (angelina: books/chudo_derevo_redmi, handwritten/kov, ...; dsbi: book name)
+            rel_parent = img_path.parent.relative_to(root).as_posix()
+            img_id = builder.add_image(w, h, file_name, source=name,
+                                       group=f"{name}/{rel_parent}")
             for cid, xywh in boxes:
                 builder.add_box(img_id, cid, xywh)
                 n_box += 1

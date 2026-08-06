@@ -81,6 +81,12 @@ un-corrected version.
 
 This is the pipeline you described. Four scripted stages + human review.
 
+> **Strategy pivot (2026-08-07):** the hosted Roboflow model 507s on its serverless tier, and the
+> replacement hosted workflow is 26-class (a–z) only. So the order is now: **Phase 3 split + Phase 4
+> RF-DETR training on the Angelina+DSBI base set come FIRST**, and that 63-class model becomes the
+> pre-annotator for our own photos (`prelabel.py --backend rfdetr`). The Roboflow backends remain as
+> fallbacks. This is also the cleaner paper story: our own open model bootstraps our dataset.
+
 0. **Enhance** (`scripts/annotate/enhance.py`): illumination-normalize each photo (white-balance + CLAHE + flat-field). ⚠️ **No deshadowing/binarization** — embossed braille is read from dot micro-shadows; removing them hurts detection. A/B enhance-on/off as an ablation.
 1. **Auto-crop** (`scripts/annotate/crop_page.py`): for each photo, run DocAligner → 4 corners → `cv2.getPerspectiveTransform`+`warpPerspective` → save top-down page. Fall back to the OpenCV contour method if DocAligner returns no valid quad.
 2. **Pre-annotate** (`scripts/annotate/prelabel.py`, **two swappable backends**): `--backend roboflow` (existing hosted model — bootstrap the first labels) or `--backend rfdetr --weights <ckpt>` (our trained model, Phase 4+). Convert predictions → `sv.Detections` → write **COCO** (canonical) + per-image **YOLO** `.txt`. ⚠️ Low accept threshold (~0.25–0.35) + class-agnostic NMS @IoU~0.5 — on dense pages deleting a false box is cheaper than drawing a missed one.

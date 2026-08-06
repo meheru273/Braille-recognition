@@ -1,0 +1,83 @@
+"""Phase 4 - fine-tune RF-DETR on the braille dataset (63-class six-dot schema).
+
+Needs: pip install rfdetr  (Python >=3.10, CUDA GPU; use rfdetr[loggers] for
+TensorBoard/W&B - note there is NO rfdetr[metrics] extra).
+
+Dataset layout (produced by scripts/dataset/split.py):
+    dataset/{train,valid,test}/ each with images + _annotations.coco.json
+
+Defaults follow the plan (RESEARCH_PLAN.md): Medium@576, effective batch 16
+(batch 4 x grad-accum 4 for a 16GB GPU), lr 1e-4, ~50 epochs, report from
+checkpoint_best_ema.pth. Stay within Nano-Large (Apache-2.0); never XL/2XL.
+
+    python scripts/model/train_rfdetr.py --dataset-dir scripts/data/dataset
+    python scripts/model/train_rfdetr.py --model nano --epochs 30      # quick first run
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from common import config  # noqa: E402
+
+MODELS = {}  # name -> class, resolved lazily so --help works without rfdetr installed
+
+
+def _load_models():
+    from rfdetr import RFDETRNano, RFDETRSmall, RFDETRMedium, RFDETRLarge
+    MODELS.update({"nano": RFDETRNano, "small": RFDETRSmall,
+                   "medium": RFDETRMedium, "large": RFDETRLarge})
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--dataset-dir", default=str(config.DATA_DIR / "dataset"))
+    ap.add_argument("--model", default="medium", choices=["nano", "small", "medium", "large"])
+    ap.add_argument("--epochs", type=int, default=50)
+    ap.add_argument("--batch-size", type=int, default=4)
+    ap.add_argument("--grad-accum", type=int, default=4,
+                    help="effective batch = batch-size x grad-accum (target 16)")
+    ap.add_argument("--lr", type=float, default=1e-4)
+    ap.add_argument("--resolution", type=int, default=None,
+                    help="must be divisible by 56; default = model's native")
+    ap.add_argument("--output", default=str(config.DATA_DIR / "runs" / "rfdetr"))
+    ap.add_argument("--tensorboard", action="store_true")
+    ap.add_argument("--wandb", action="store_true")
+    a = ap.parse_args()
+
+    ds = Path(a.dataset_dir)
+    for split_name in ("train", "valid", "test"):
+        if not (ds / split_name / "_annotations.coco.json").exists():
+            raise SystemExit(f"missing {ds / split_name / '_annotations.coco.json'} - "
+                             "run scripts/dataset/split.py first")
+    if a.resolution and a.resolution % 56:
+        raise SystemExit(f"--resolution must be divisible by 56 (got {a.resolution})")
+
+    _load_models()
+    model = MODELS[a.model]()          # COCO-pretrained weights auto-download
+    out = Path(a.output) / a.model
+    out.mkdir(parents=True, exist_ok=True)
+
+    kwargs = dict(dataset_dir=str(ds), epochs=a.epochs, batch_size=a.batch_size,
+                  grad_accum_steps=a.grad_accum, lr=a.lr, output_dir=str(out))
+    if a.resolution:
+        kwargs["resolution"] = a.resolution
+    if a.tensorboard:
+        kwargs["tensorboard"] = True
+    if a.wandb:
+        kwargs["wandb"] = True
+
+    print(f"RF-DETR {a.model} | effective batch {a.batch_size * a.grad_accum} | "
+          f"epochs {a.epochs} | out {out}")
+    model.train(**kwargs)
+    print(f"\nDone. Report metrics from {out}/checkpoint_best_ema.pth")
+    print("Next: prelabel our photos with it ->")
+    print(f"  python scripts/annotate/prelabel.py --backend rfdetr "
+          f"--weights {out}/checkpoint_best_ema.pth --auto-orient")
+
+
+if __name__ == "__main__":
+    main()

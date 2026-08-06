@@ -45,6 +45,11 @@ def step_stats(datasets):
 
 
 # --- Phase 2: our own contributed photos (set --input) -------------------------------
+def step_split(datasets):
+    from dataset import split as split_mod
+    split_mod.split()
+
+
 def step_enhance(datasets, input_dir=None, preview=0):
     from annotate import enhance
     if not input_dir:
@@ -66,6 +71,7 @@ STEPS = {
     "annotate": step_annotate,
     "visualize": step_visualize,
     "stats": step_stats,
+    "split": step_split,
     "enhance": step_enhance,
     "crop": step_crop,
 }

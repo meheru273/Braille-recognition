@@ -60,6 +60,16 @@ def split(coco_dir: Path = None, out_dir: Path = None, test_size: float = 0.15,
     coco = json.loads((coco_dir / "_annotations.coco.json").read_text(encoding="utf-8"))
 
     images = coco["images"]
+    # The COCO must carry per-book `group` metadata (written by the current
+    # annotator). Without it the fallback collapses each source into ONE mega-group
+    # ("angelina"/"dsbi"), which yields a degenerate split - seen in practice as
+    # "train: 0 boxes". Rebuilding is cheap and the only correct fix.
+    n_missing = sum(1 for im in images if not im.get("group"))
+    if n_missing:
+        raise SystemExit(
+            f"{n_missing}/{len(images)} images lack 'group' metadata - this COCO was "
+            "built by an older annotator. Re-run:\n"
+            "  python scripts/dataset/orchestrator.py --steps annotate,split")
     with_boxes = {a["image_id"] for a in coco["annotations"]}
     negative_ids = frozenset(im["id"] for im in images if im["id"] not in with_boxes)
     groups = [_group_of(im, negative_ids) for im in images]

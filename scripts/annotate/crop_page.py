@@ -109,6 +109,22 @@ def normalize_scale(bgr: np.ndarray,
     return cv2.resize(bgr, (max(1, int(w * f)), max(1, int(h * f))), interpolation=interp)
 
 
+def ensure_portrait(bgr: np.ndarray, rotate_dir: str = "cw") -> np.ndarray:
+    """All pages in our book are VERTICAL; some files were saved rotated (no EXIF tag),
+    so landscape crops are turned upright.
+
+    Direction matters: braille is orientation-sensitive - a cell rotated 180 degrees is a
+    DIFFERENT character (dots 1<->6, 2<->5, 3<->4). CW and CCW both yield portrait but
+    differ by 180, so the correct direction must be confirmed on real pages
+    (see `--orient-preview`), not guessed.
+    """
+    h, w = bgr.shape[:2]
+    if w <= h:
+        return bgr
+    code = cv2.ROTATE_90_CLOCKWISE if rotate_dir == "cw" else cv2.ROTATE_90_COUNTERCLOCKWISE
+    return cv2.rotate(bgr, code)
+
+
 def crop(bgr: np.ndarray, do_scale: bool = True):
     """-> (cropped_bgr, corners_or_None, method)."""
     if _DOCALIGNER is not None:

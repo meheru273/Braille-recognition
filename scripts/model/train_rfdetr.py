@@ -31,6 +31,34 @@ def _load_models():
                    "medium": RFDETRMedium, "large": RFDETRLarge})
 
 
+_ANSI = __import__("re").compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+class _Tee:
+    """Mirror a stream into a log file (ANSI-stripped) so the console metric tables
+    survive the terminal scrollback. rfdetr prints its per-epoch mAP tables via rich
+    to stdout only - without this, a closed terminal means the history is gone."""
+
+    def __init__(self, stream, fh):
+        self._s, self._f = stream, fh
+
+    def write(self, text):
+        self._s.write(text)
+        self._f.write(_ANSI.sub("", text))
+        self._f.flush()
+        return len(text)
+
+    def flush(self):
+        self._s.flush()
+        self._f.flush()
+
+    def isatty(self):
+        return self._s.isatty()
+
+    def __getattr__(self, name):
+        return getattr(self._s, name)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -44,7 +72,8 @@ def main() -> None:
     ap.add_argument("--resolution", type=int, default=None,
                     help="must be divisible by 56; default = model's native")
     ap.add_argument("--output", default=str(config.DATA_DIR / "runs" / "rfdetr"))
-    ap.add_argument("--tensorboard", action="store_true")
+    ap.add_argument("--no-tensorboard", action="store_true",
+                    help="TensorBoard is ON by default (needs rfdetr[train,loggers])")
     ap.add_argument("--wandb", action="store_true")
     a = ap.parse_args()
 
@@ -68,22 +97,34 @@ def main() -> None:
     if a.resolution and a.resolution % 56:
         raise SystemExit(f"--resolution must be divisible by 56 (got {a.resolution})")
 
-    _load_models()
-    model = MODELS[a.model]()          # COCO-pretrained weights auto-download
     out = Path(a.output) / a.model
     out.mkdir(parents=True, exist_ok=True)
+
+    # Persist EVERYTHING training prints (incl. the rich per-epoch mAP tables) -
+    # armed BEFORE model load so backbone/weight warnings are captured too.
+    import datetime
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    console_log = out / f"train_console_{stamp}.log"
+    fh = open(console_log, "a", encoding="utf-8", errors="replace")
+    sys.stdout = _Tee(sys.stdout, fh)
+    sys.stderr = _Tee(sys.stderr, fh)
+    print(f"console log -> {console_log}")
+
+    _load_models()
+    model = MODELS[a.model]()          # COCO-pretrained weights auto-download
 
     kwargs = dict(dataset_dir=str(ds), epochs=a.epochs, batch_size=a.batch_size,
                   grad_accum_steps=a.grad_accum, lr=a.lr, output_dir=str(out))
     if a.resolution:
         kwargs["resolution"] = a.resolution
-    if a.tensorboard:
+    if not a.no_tensorboard:
         kwargs["tensorboard"] = True
     if a.wandb:
         kwargs["wandb"] = True
 
     print(f"RF-DETR {a.model} | effective batch {a.batch_size * a.grad_accum} | "
           f"epochs {a.epochs} | out {out}")
+    print(f"tensorboard -> {'ON (tensorboard --logdir ' + str(out) + ')' if not a.no_tensorboard else 'off'}")
     model.train(**kwargs)
     print(f"\nDone. Report metrics from {out}/checkpoint_best_ema.pth")
     print("Next: prelabel our photos with it ->")

@@ -120,15 +120,21 @@ def make_backend(name: str, conf: float, weights: str = None, size: str = "mediu
 
 
 # --------------------------------------------------------------------------------------
+def _make_slicer(detect_fn, iou: float):
+    """supervision renamed the overlap argument: <=0.25 uses overlap_ratio_wh (fraction),
+    >=0.26 uses overlap_wh (absolute pixels) and errors on the old name. Support both."""
+    common = dict(callback=lambda tile: detect_fn(tile),
+                  slice_wh=(TILE, TILE), iou_threshold=iou)
+    try:
+        return sv.InferenceSlicer(overlap_wh=(int(TILE * TILE_OVERLAP),
+                                              int(TILE * TILE_OVERLAP)), **common)
+    except TypeError:
+        return sv.InferenceSlicer(overlap_ratio_wh=(TILE_OVERLAP, TILE_OVERLAP), **common)
+
+
 def sliced_detect(detect_fn, image: np.ndarray, conf: float, iou: float) -> sv.Detections:
     """Tiled inference + merge. Braille cells are tiny relative to a page."""
-    slicer = sv.InferenceSlicer(
-        callback=lambda tile: detect_fn(tile),
-        slice_wh=(TILE, TILE),
-        overlap_ratio_wh=(TILE_OVERLAP, TILE_OVERLAP),
-        iou_threshold=iou,
-    )
-    det = slicer(image)
+    det = _make_slicer(detect_fn, iou)(image)
     return det.with_nms(threshold=iou, class_agnostic=True)
 
 

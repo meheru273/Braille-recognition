@@ -125,27 +125,49 @@ def ensure_portrait(bgr: np.ndarray, rotate_dir: str = "cw") -> np.ndarray:
     return cv2.rotate(bgr, code)
 
 
-def crop(bgr: np.ndarray, do_scale: bool = True):
-    """-> (cropped_bgr, corners_or_None, method)."""
+def _covers_whole_frame(corners: np.ndarray, shape, tol: float = 0.97) -> bool:
+    """A 'crop' whose quad is essentially the entire photo means detection failed
+    silently (the classic symptom: every output has identical full-frame dimensions)."""
+    h, w = shape[:2]
+    quad_area = cv2.contourArea(corners.astype(np.float32))
+    return quad_area >= tol * (h * w)
+
+
+def crop(bgr: np.ndarray, do_scale: bool = True, portrait: bool = True,
+         rotate_dir: str = "cw"):
+    """-> (cropped_bgr, corners_or_None, method).
+
+    IMPORTANT: run this on the RAW photo, before enhancement. Flat-field
+    normalization deliberately flattens the page-vs-background illumination
+    difference, which is exactly the signal page detection relies on - cropping
+    enhanced images made ~25% of pages fail to full-frame.
+    """
+    def _finish(img, corners, method):
+        if portrait:
+            img = ensure_portrait(img, rotate_dir)
+        return (normalize_scale(img) if do_scale else img), corners, method
+
     if _DOCALIGNER is not None:
         try:
             poly = _DOCALIGNER(bgr)
             pts = np.asarray(getattr(poly, "points", poly), dtype=np.float32).reshape(-1, 2)
             if pts.shape[0] == 4:
                 corners = order_corners(pts)
-                out = warp_to_page(bgr, corners)
-                return (normalize_scale(out) if do_scale else out), corners, "docaligner"
+                if not _covers_whole_frame(corners, bgr.shape):
+                    return _finish(warp_to_page(bgr, corners), corners, "docaligner")
         except Exception:  # noqa: BLE001
             pass
     corners, method = find_page_corners(bgr)
     if corners is None:
-        return (normalize_scale(bgr) if do_scale else bgr), None, f"FAILED: {method}"
-    out = warp_to_page(bgr, corners)
-    return (normalize_scale(out) if do_scale else out), corners, method
+        return _finish(bgr, None, f"FAILED: {method}")
+    if _covers_whole_frame(corners, bgr.shape):
+        return _finish(bgr, None, f"FAILED: quad covers whole frame ({method})")
+    return _finish(warp_to_page(bgr, corners), corners, method)
 
 
 def run(input_dir: Path, out_dir: Path = None, preview: int = 0,
-        do_scale: bool = True) -> None:
+        do_scale: bool = True, portrait: bool = True, rotate_dir: str = "cw",
+        enhance_after: bool = True) -> None:
     out_dir = Path(out_dir or config.CONTRIB_CROPPED)
     paths = sorted(p for p in Path(input_dir).iterdir()
                    if p.suffix.lower() in config.IMAGE_EXTS)
@@ -162,9 +184,16 @@ def run(input_dir: Path, out_dir: Path = None, preview: int = 0,
     n_fail = 0
     for p in paths:
         img = _imread(p)
-        out, corners, method = crop(img, do_scale=do_scale)
+        out, corners, method = crop(img, do_scale=do_scale, portrait=portrait,
+                                    rotate_dir=rotate_dir)
         if corners is None:
             n_fail += 1
+        if enhance_after:
+            # Enhance AFTER cropping: page detection needs the raw illumination
+            # difference, and enhancing only the page avoids wasting the CLAHE
+            # dynamic range on background clutter.
+            from annotate.enhance import enhance as _enhance
+            out = _enhance(out)
         h, w = img.shape[:2]
         oh, ow = out.shape[:2]
         print(f"  {p.name}: {w}x{h} -> {ow}x{oh}   [{method}]")
@@ -194,10 +223,20 @@ def run(input_dir: Path, out_dir: Path = None, preview: int = 0,
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--input", required=True)
+    ap.add_argument("--input", required=True,
+                    help="folder of RAW photos (do NOT pre-enhance - see crop() docstring)")
     ap.add_argument("--out", default=None)
     ap.add_argument("--preview", type=int, default=0)
     ap.add_argument("--no-scale", action="store_true",
                     help="skip resizing to the training cell scale")
+    ap.add_argument("--no-portrait", action="store_true",
+                    help="keep landscape crops as-is instead of rotating upright")
+    ap.add_argument("--rotate-dir", default="cw", choices=["cw", "ccw"],
+                    help="direction for landscape->portrait (prelabel --auto-orient "
+                         "resolves the remaining 180-degree ambiguity)")
+    ap.add_argument("--no-enhance", action="store_true",
+                    help="skip illumination enhancement of the cropped page")
     a = ap.parse_args()
-    run(Path(a.input), a.out, a.preview, do_scale=not a.no_scale)
+    run(Path(a.input), a.out, a.preview, do_scale=not a.no_scale,
+        portrait=not a.no_portrait, rotate_dir=a.rotate_dir,
+        enhance_after=not a.no_enhance)

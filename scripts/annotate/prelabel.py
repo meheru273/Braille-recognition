@@ -123,8 +123,16 @@ def make_backend(name: str, conf: float, weights: str = None, size: str = "mediu
 def _make_slicer(detect_fn, iou: float):
     """supervision renamed the overlap argument: <=0.25 uses overlap_ratio_wh (fraction),
     >=0.26 uses overlap_wh (absolute pixels) and errors on the old name. Support both."""
-    common = dict(callback=lambda tile: detect_fn(tile),
-                  slice_wh=(TILE, TILE), iou_threshold=iou)
+    def _cb(tile):
+        det = detect_fn(tile)
+        # rfdetr's predict() attaches metadata={'source_image': <tile array>}; the
+        # slicer's Detections.merge REQUIRES identical metadata across tiles, and
+        # every tile is a different array -> ValueError. We don't need it - drop it.
+        if getattr(det, "metadata", None):
+            det.metadata = {}
+        return det
+
+    common = dict(callback=_cb, slice_wh=(TILE, TILE), iou_threshold=iou)
     try:
         return sv.InferenceSlicer(overlap_wh=(int(TILE * TILE_OVERLAP),
                                               int(TILE * TILE_OVERLAP)), **common)

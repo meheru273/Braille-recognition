@@ -50,6 +50,11 @@ def step_split(datasets):
     split_mod.split()
 
 
+def step_tile(datasets):
+    from dataset import tile as tile_mod
+    tile_mod.run()
+
+
 def step_enhance(datasets, input_dir=None, preview=0):
     from annotate import enhance
     if not input_dir:
@@ -72,6 +77,7 @@ STEPS = {
     "visualize": step_visualize,
     "stats": step_stats,
     "split": step_split,
+    "tile": step_tile,
     "enhance": step_enhance,
     "crop": step_crop,
 }
